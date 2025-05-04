@@ -112,6 +112,12 @@ class PitchAccentApp:
         self.span_active = False
         self.canvas.mpl_connect('button_press_event', self.on_mouse_down)
         self.canvas.mpl_connect('button_release_event', self.on_mouse_up)
+        
+        # Add space bar binding for playback toggle
+        self.root.bind('<space>', lambda event: self.toggle_native_playback())
+        
+        # Keep existing 'r' binding for recording
+        self.root.bind('<r>', lambda event: self.toggle_recording())
 
     def on_select_region(self, xmin, xmax):
         if self.is_playing_thread_active:
