@@ -127,31 +127,45 @@ class PitchAccentApp:
             except Exception as e:
                 print(f"Error updating selection: {e}")
 
-            # Handle playback restart if needed
-            if self.playing:
+            # Handle playback restart if it was playing before
+            if hasattr(self, 'was_playing') and self.was_playing:
+                self.restart_playback()
+
+    def restart_playback(self):
+        """Safely restart playback with the current selection"""
+        def safe_restart():
+            try:
                 with self.playback_lock:
                     self.playing = False
                     sd.stop()
                     time.sleep(0.1)
                     self.playing = True
-                    self.root.after(100, lambda: threading.Thread(target=self.loop_native_audio, daemon=True).start())
+                    self.play_button.config(text="Stop")
+                    threading.Thread(target=self.loop_native_audio, daemon=True).start()
+            except Exception as e:
+                print(f"Error restarting playback: {e}")
+                self.playing = False
+                self.play_button.config(text="Play")
+                
+        self.root.after(100, safe_restart)
 
     def on_mouse_down(self, event):
         if self.playing:
+            self.was_playing = True  # Store the playing state
             self.playing = False
             sd.stop()
             self.play_button.config(text="Play")
+            self.span_active = True
+        else:
+            self.was_playing = False
             self.span_active = True
 
     def on_mouse_up(self, event):
         if self.span_active:
             self.span_active = False
-            def resume():
-                time.sleep(1.0)
-                if not self.playing:
-                    self.playing = True
-                    threading.Thread(target=self.loop_native_audio, daemon=True).start()
-            threading.Thread(target=resume, daemon=True).start()
+            # Re-enable the SpanSelector
+            if hasattr(self, 'span'):
+                self.span.active = True
 
     def on_click_outside(self, event):
         if event.inaxes != self.ax_native:
@@ -207,25 +221,39 @@ class PitchAccentApp:
             return x_sparse, y_sparse
 
     def clear_selection(self):
+        # First stop any ongoing playback
+        was_playing = self.playing
+        if was_playing:
+            self.playing = False
+            sd.stop()
+            self.play_button.config(text="Play")
+            time.sleep(0.1)  # Give time for playback to stop
+
         with self.selection_lock:  # Thread-safe selection clearing
             self._loop_start = 0.0
             self._loop_end = None
-            if hasattr(self, 'selection_patch') and self.selection_patch and self.selection_patch in self.ax_native.patches:
-                try:
+            try:
+                # Clear our selection patch
+                if hasattr(self, 'selection_patch') and self.selection_patch and self.selection_patch in self.ax_native.patches:
                     self.selection_patch.remove()
                     self.selection_patch = None
-                    self.loop_info_label.config(text="Loop: Full clip")
-                    self.canvas.draw_idle()
-                except Exception as e:
-                    print(f"Error clearing selection: {e}")
+                
+                # Clear the SpanSelector's visual selection
+                if hasattr(self, 'span'):
+                    self.span.clear()
+                    
+                self.loop_info_label.config(text="Loop: Full clip")
+                self.canvas.draw_idle()
+            except Exception as e:
+                print(f"Error clearing selection: {e}")
 
-            if self.playing:
-                with self.playback_lock:
-                    self.playing = False
-                    sd.stop()
-                    time.sleep(0.1)  # Short delay to ensure audio stops
-                    self.playing = True
-                    self.root.after(100, lambda: threading.Thread(target=self.loop_native_audio, daemon=True).start())
+        # If it was playing, restart playback with the full clip
+        if was_playing:
+            def safe_restart():
+                self.playing = True
+                self.play_button.config(text="Stop")
+                threading.Thread(target=self.loop_native_audio, daemon=True).start()
+            self.root.after(200, safe_restart)  # Use after() to ensure UI is responsive
 
     def load_native(self):
         file_path = filedialog.askopenfilename(filetypes=[("Audio/Video files", "*.wav *.mp3 *.mp4 *.mov *.avi")])
