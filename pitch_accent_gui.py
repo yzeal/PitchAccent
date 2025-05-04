@@ -21,6 +21,14 @@ from tkinterdnd2 import *  # For drag & drop support
 
 class PitchAccentApp:
     def __init__(self, root):
+        # Add these lines at the start
+        import sys
+        import os
+        if getattr(sys, 'frozen', False):
+            # If the application is run as a bundle, redirect stdout/stderr
+            sys.stdout = open(os.devnull, 'w')
+            sys.stderr = open(os.devnull, 'w')
+        
         self.is_playing_thread_active = False
         self.root = root
         self.root.title("Pitch Accent Trainer")
