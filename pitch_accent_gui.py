@@ -316,19 +316,20 @@ class PitchAccentApp:
     def extract_smoothed_pitch(self, path, f0_min=75, f0_max=500):
         snd = parselmouth.Sound(path)
         duration = snd.get_total_duration()
-        pitch = snd.to_pitch(time_step=0.01, pitch_floor=f0_min, pitch_ceiling=f0_max)
+        # Even finer time step
+        pitch = snd.to_pitch(time_step=0.003, pitch_floor=f0_min, pitch_ceiling=f0_max)
         pitch_values = pitch.selected_array['frequency']
         confidence = pitch.selected_array['strength']
         times = pitch.xs()
 
-        # Get voiced segments
-        voiced_mask = (confidence > 0.7) & (pitch_values > 0)
+        # Even lower confidence threshold
+        voiced_mask = (confidence > 0.15) & (pitch_values > 0)  # Lowered from 0.3 to 0.15
         voiced_indices = np.where(voiced_mask)[0]
         
         if len(voiced_indices) < 4:
             return times, pitch_values, voiced_mask
 
-        n_points = max(4, int(duration * 10))
+        n_points = max(4, int(duration * 20))
         step = max(1, len(voiced_indices) // n_points)
         selected = voiced_indices[::step]
 
@@ -343,13 +344,12 @@ class PitchAccentApp:
             x_dense = np.linspace(x_sparse[0], x_sparse[-1], 300)
             y_dense = f_interp(x_dense)
 
-            if len(y_dense) >= 11:
-                y_dense = savgol_filter(y_dense, window_length=11, polyorder=2)
+            if len(y_dense) >= 13:
+                # Keep the same smoothing parameters to maintain curve smoothness
+                y_dense = savgol_filter(y_dense, window_length=13, polyorder=2)
 
-            # Create voiced mask for interpolated points
             voiced_dense = np.zeros_like(x_dense, dtype=bool)
             for i, x in enumerate(x_dense):
-                # Find nearest original time point
                 nearest_idx = np.abs(times - x).argmin()
                 voiced_dense[i] = voiced_mask[nearest_idx]
 
