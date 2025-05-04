@@ -283,6 +283,10 @@ class PitchAccentApp:
             ax.set_ylim(0, 500)  # Changed from 50 to 0
             ax.grid(True)
 
+        # Store the background for blitting
+        self.canvas.draw()
+        self.background = self.canvas.copy_from_bbox(self.ax_native.bbox)
+
     def get_selected_devices(self):
         input_index = self.input_devices[self.input_selector.current()]['index']
         output_index = self.output_devices[self.output_selector.current()]['index']
@@ -627,18 +631,38 @@ class PitchAccentApp:
                 y = snd.values[0][start_sample:end_sample]
                 duration = (end_sample - start_sample) / sr
                 self.native_duration = duration
+                total_samples = len(y)
 
                 _, output_index = self.get_selected_devices()
 
                 while self.playing:
                     self.last_native_loop_time = time.time()
-                    sd.play(y, sr, device=output_index)
-                    start_time = self.last_native_loop_time
                     
-                    while time.time() - start_time < duration and self.playing:
-                        current = time.time() - start_time
-                        self.root.after(0, lambda t=current: self.update_playback_overlay(t))
-                        time.sleep(0.03)
+                    # Create a callback to track actual playback position
+                    current_position = [0]
+                    last_update_time = [time.time()]
+                    
+                    def callback(outdata, frames, time_info, status):  # Fixed parameter name
+                        if status:
+                            print(f'Playback callback status: {status}')
+                        
+                        current_position[0] += frames
+                        
+                        # Update overlay at most 30 times per second
+                        current_wall_time = time.time()  # Use time.time() instead of parameter
+                        if current_wall_time - last_update_time[0] >= 1/30:
+                            # Calculate position in seconds
+                            playback_time = (current_position[0] / total_samples) * duration
+                            self.root.after_idle(lambda t=playback_time: self.update_playback_overlay(t))
+                            last_update_time[0] = current_wall_time
+
+                    # Start playback with callback
+                    with sd.OutputStream(samplerate=sr, channels=1, callback=callback,
+                                      finished_callback=lambda: print("Stream finished"),
+                                      device=output_index):
+                        sd.play(y, sr, device=output_index)
+                        while current_position[0] < total_samples and self.playing:
+                            sd.sleep(10)
                     
                     if self.playing:  # Check if we should continue looping
                         sd.stop()
@@ -647,9 +671,11 @@ class PitchAccentApp:
                         loop_delay = self.get_loop_delay()
                         if loop_delay > 0:
                             time.sleep(loop_delay)
-                
+            
             except Exception as e:
                 print(f"Error in audio playback: {e}")
+                import traceback
+                traceback.print_exc()
             finally:
                 self.is_playing_thread_active = False
                 # Safely remove overlay when playback thread ends
@@ -665,13 +691,20 @@ class PitchAccentApp:
 
     def update_playback_overlay(self, current_time):
         try:
-            if self.overlay_patch in self.ax_native.patches:
+            # Make sure we remove the previous overlay
+            if hasattr(self, 'overlay_patch') and self.overlay_patch in self.ax_native.patches:
                 self.overlay_patch.remove()
+                self.overlay_patch = None  # Clear the reference
+            
+            # Create new overlay
+            start = self._loop_start if self._loop_end else 0
+            self.overlay_patch = self.ax_native.axvspan(start, start + current_time, color='gray', alpha=0.2)
+            
+            # Simple draw update
+            self.canvas.draw_idle()
+            
         except Exception as e:
-            print("Overlay removal error:", e)
-        start = self._loop_start if self._loop_end else 0
-        self.overlay_patch = self.ax_native.axvspan(start, start + current_time, color='gray', alpha=0.2)
-        self.canvas.draw_idle()
+            print(f"Overlay update error: {e}")
 
     def toggle_recording(self):
         self.record_audio()
