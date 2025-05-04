@@ -98,7 +98,7 @@ class PitchAccentApp:
         self.play_user_button = tk.Button(control_frame, text="Play Your Recording", command=self.play_user_audio, state=tk.DISABLED)
         self.play_user_button.pack(pady=2)
 
-        self.fig, (self.ax_native, self.ax_user) = plt.subplots(2, 1, figsize=(12, 8), dpi=100)
+        self.fig, (self.ax_native, self.ax_user) = plt.subplots(2, 1, figsize=(12, 4), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.span = SpanSelector(
@@ -186,6 +186,7 @@ class PitchAccentApp:
         self.ax_user.set_xlabel("Time (s)")
         for ax in (self.ax_native, self.ax_user):
             ax.set_ylabel("Hz")
+            ax.set_ylim(50, 500)  # Set initial y-axis limits
             ax.grid(True)
 
     def get_selected_devices(self):
@@ -317,6 +318,7 @@ class PitchAccentApp:
         self.ax_native.set_title("Native Speaker (Smoothed Pitch)")
         self.ax_native.set_ylabel("Hz")
         self.ax_native.set_xlim(0, x[-1] if len(x) > 0 else 0)
+        self.ax_native.set_ylim(50, 500)
         self.ax_native.legend()
         self.ax_native.grid(True)
         self.canvas.draw()
@@ -408,10 +410,14 @@ class PitchAccentApp:
             current_loop_start = self._loop_start
             current_loop_end = self._loop_end
             
+        # Calculate the expected duration first
+        padding = 2.0
+        duration = (self.native_duration + padding) if hasattr(self, 'native_duration') else 6
+            
         self.ax_user.clear()
         self.ax_user.grid(True)
         self.ax_user.set_ylim(50, 500)
-        self.ax_user.set_xlim(0, 5)
+        self.ax_user.set_xlim(0, duration)  # Set x-axis to match expected duration
         self.ax_user.set_title("Your Recording (Real-time Pitch)")
         self.ax_user.set_ylabel("Hz")
         self.canvas.draw()
@@ -428,8 +434,6 @@ class PitchAccentApp:
             fs = 22050
             chunk_duration = 0.2  # Reduced from 0.5s to 0.2s for more frequent updates
             chunk_samples = int(fs * chunk_duration)
-            padding = 2.0
-            duration = (self.native_duration + padding) if hasattr(self, 'native_duration') else 6
             frames = []
             pitch_buffer = []
             
@@ -453,6 +457,7 @@ class PitchAccentApp:
                     self.ax_user.set_title("Your Recording (Real-time Pitch)")
                     self.ax_user.set_ylabel("Hz")
                     self.ax_user.set_ylim(50, 500)
+                    self.ax_user.set_xlim(0, duration)  # Keep the same duration throughout recording
                     
                     # Plot the continuous curve with base thickness and transparency
                     line, = self.ax_user.plot(x, y, color='orange', linewidth=1.5, alpha=0.2)
@@ -583,6 +588,7 @@ class PitchAccentApp:
         self.ax_user.set_title("Your Recording (Smoothed Pitch)")
         self.ax_user.set_ylabel("Hz")
         self.ax_user.set_xlabel("Time (s)")
+        self.ax_user.set_ylim(50, 500)
         self.ax_user.legend()
         self.ax_user.grid(True)
         self.canvas.draw()
