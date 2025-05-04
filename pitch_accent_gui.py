@@ -25,7 +25,9 @@ class PitchAccentApp:
         self.root.title("Pitch Accent Trainer")
         
         # Set a larger initial window size
-        self.root.geometry("1800x1000")  # Increased from 1600x1000
+        self.base_height = 1000  # Base window height without landscape video
+        self.landscape_height = 300  # Height to add for landscape videos
+        self.root.geometry(f"1800x{self.base_height}")  # Initial window size
         
         # Add proper cleanup on window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -57,7 +59,10 @@ class PitchAccentApp:
 
         self.user_playing = False  # Add this to the initialization
 
-        self.video_frame_label = None  # Add this to store the video frame label
+        self.video_window = None  # Store reference to video window
+        self.video_frame_label = None  # Store reference to video label
+
+        self.show_video_var = tk.BooleanVar(value=True)  # Default to showing video
 
         self.setup_gui()
         self.setup_plot()
@@ -84,30 +89,39 @@ class PitchAccentApp:
         self.loop_info_label.pack(side=tk.RIGHT, padx=10)
 
         # Create main content frame
-        main_frame = tk.Frame(self.root)
-        main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.main_frame = tk.Frame(self.root)
+        self.main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # Create a horizontal container frame for video and plots
-        content_container = tk.Frame(main_frame)
-        content_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # Create a container for the main content (plots and controls)
+        self.content_container = tk.Frame(self.main_frame)
+        self.content_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # Create video frame (left side)
-        self.video_frame = tk.Frame(content_container, width=400)  # Set fixed width
-        self.video_frame.pack(side=tk.LEFT, fill=tk.Y)
-        self.video_frame.pack_propagate(False)  # Prevent frame from shrinking
+        # Create a single video frame that can be repositioned
+        self.video_frame = tk.Frame(self.root)  # Create but don't pack yet
+        self.video_frame.pack_propagate(False)
 
         # Create plot frame (center)
-        plot_frame = tk.Frame(content_container)
+        plot_frame = tk.Frame(self.content_container)
         plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Create control frame (right side)
-        control_frame = tk.Frame(main_frame)
+        control_frame = tk.Frame(self.content_container)
         control_frame.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Setup control frame contents
         tk.Label(control_frame, text="Native Controls").pack(pady=(10, 0))
         tk.Button(control_frame, text="Clear Loop Selection", command=self.clear_selection).pack(pady=2)
         tk.Button(control_frame, text="Load Native Audio", command=self.load_native).pack(pady=2)
+        
+        # Add checkbox for video screenshot
+        self.show_video_checkbox = tk.Checkbutton(
+            control_frame, 
+            text="Show Video Screenshot", 
+            variable=self.show_video_var,
+            command=self.toggle_video_visibility
+        )
+        self.show_video_checkbox.pack(pady=2)
+        
         self.play_button = tk.Button(control_frame, text="Play", command=self.toggle_native_playback, state=tk.DISABLED)
         self.play_button.pack(pady=2)
 
@@ -321,12 +335,26 @@ class PitchAccentApp:
             audio.write_audiofile(tmp_path, codec='pcm_s16le')
             self.native_audio_path = tmp_path
             
-            # Extract and display first frame
-            self.display_video_frame(file_path)
+            # Extract first frame but only display if checkbox is checked
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self.original_frame = frame_rgb
+                height, width = frame_rgb.shape[:2]
+                self.aspect_ratio = width / height
+                
+                # Only show video frame if checkbox is checked
+                if self.show_video_var.get():
+                    self.display_video_frame_internal(frame_rgb, width, height)
         else:
             # Handle audio file
             self.native_audio_path = file_path
-            # For audio files, clear the video frame content but keep the frame visible
+            # Clear any existing video frame
+            if hasattr(self, 'original_frame'):
+                delattr(self, 'original_frame')
             self.clear_video_frame()
 
         self.clear_selection()
@@ -334,62 +362,133 @@ class PitchAccentApp:
         self.play_button.config(state=tk.NORMAL)
 
     def display_video_frame(self, video_path):
+        """Legacy method - now just handles initial video loading"""
         try:
-            # Clear any existing frame
             self.clear_video_frame()
             
-            # Read the first frame
             cap = cv2.VideoCapture(video_path)
             ret, frame = cap.read()
             cap.release()
             
             if ret:
-                # Convert BGR to RGB
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Get video frame dimensions
-                video_frame_width = 400  # Fixed width for video frame
-                video_frame_height = self.root.winfo_height() - 100  # Account for top frame
-                
-                # Calculate target size maintaining aspect ratio
+                self.original_frame = frame_rgb
                 height, width = frame_rgb.shape[:2]
-                aspect_ratio = width / height
+                self.aspect_ratio = width / height
                 
-                # Calculate dimensions to fit in video frame
-                if width / height > video_frame_width / video_frame_height:
-                    # Width limited
-                    target_width = video_frame_width - 20  # Account for padding
-                    target_height = int(target_width / aspect_ratio)
-                else:
-                    # Height limited
-                    target_height = video_frame_height - 20  # Account for padding
-                    target_width = int(target_height * aspect_ratio)
-                
-                # Resize frame
-                frame_resized = cv2.resize(frame_rgb, (target_width, target_height))
-                
-                # Convert to PhotoImage
-                image = Image.fromarray(frame_resized)
-                photo = ImageTk.PhotoImage(image)
-                
-                # Create and display label
-                self.video_frame_label = tk.Label(self.video_frame, image=photo)
-                self.video_frame_label.image = photo  # Keep a reference
-                self.video_frame_label.pack(expand=True)
-                
+                if self.show_video_var.get():
+                    self.display_video_frame_internal(frame_rgb, width, height)
+                    
         except Exception as e:
             print(f"Error displaying video frame: {e}")
             import traceback
             traceback.print_exc()
 
+    def display_video_frame_internal(self, frame_rgb, width, height):
+        """Internal method to handle the actual display of the video frame"""
+        try:
+            # Create new Toplevel window
+            self.video_window = tk.Toplevel(self.root)
+            self.video_window.title("Video Screenshot")
+            
+            # Calculate initial dimensions
+            if height > width:  # Portrait
+                target_width = 400
+                target_height = int(target_width / self.aspect_ratio)
+                if target_height > 800:
+                    target_height = 800
+                    target_width = int(target_height * self.aspect_ratio)
+            else:  # Landscape
+                target_height = 300
+                target_width = int(target_height * self.aspect_ratio)
+                if target_width > 800:
+                    target_width = 800
+                    target_height = int(target_width / self.aspect_ratio)
+            
+            # Set initial window size including padding
+            window_width = target_width + 40
+            window_height = target_height + 60
+            
+            # Position and size the window
+            main_x = self.root.winfo_x()
+            main_y = self.root.winfo_y()
+            self.video_window.geometry(f"{window_width}x{window_height}+{main_x + self.root.winfo_width() + 10}+{main_y}")
+            
+            # Create a frame to hold the image and label
+            frame_container = tk.Frame(self.video_window)
+            frame_container.pack(fill=tk.BOTH, expand=True)
+            
+            # Create and display label in the new window
+            self.video_frame_label = tk.Label(frame_container)
+            self.video_frame_label.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+            
+            # Add title with video dimensions
+            self.dim_label = tk.Label(self.video_window, 
+                               text=f"Original dimensions: {width}x{height}",
+                               font=("Arial", 10))
+            self.dim_label.pack(pady=(0, 10))
+            
+            # Make window resizable
+            self.video_window.resizable(True, True)
+            
+            # Set minimum size
+            min_width = min(400, target_width + 40)
+            min_height = min(300, target_height + 60)
+            self.video_window.minsize(min_width, min_height)
+            
+            # Bind resize event
+            self.video_window.bind('<Configure>', self.on_video_window_resize)
+            
+            # Initial resize
+            self.resize_video_frame(target_width, target_height)
+            
+            # Bind window close to cleanup and uncheck checkbox
+            self.video_window.protocol("WM_DELETE_WINDOW", 
+                lambda: (self.clear_video_frame(), self.show_video_var.set(False)))
+            
+        except Exception as e:
+            print(f"Error displaying video frame: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def on_video_window_resize(self, event):
+        if event.widget == self.video_window:
+            # Get the new window size minus padding
+            new_width = event.width - 20  # Account for padding
+            new_height = event.height - 60  # Account for title bar and dimension label
+            
+            # Calculate new dimensions maintaining aspect ratio
+            if new_width / new_height > self.aspect_ratio:
+                # Window is wider than needed
+                target_height = new_height
+                target_width = int(target_height * self.aspect_ratio)
+            else:
+                # Window is taller than needed
+                target_width = new_width
+                target_height = int(target_width / self.aspect_ratio)
+            
+            self.resize_video_frame(target_width, target_height)
+
+    def resize_video_frame(self, width, height):
+        if hasattr(self, 'original_frame'):
+            # Resize the frame
+            frame_resized = cv2.resize(self.original_frame, (width, height))
+            image = Image.fromarray(frame_resized)
+            photo = ImageTk.PhotoImage(image)
+            
+            # Update the label
+            self.video_frame_label.configure(image=photo)
+            self.video_frame_label.image = photo  # Keep a reference
+
     def clear_video_frame(self):
-        """Remove the video frame label if it exists, but keep the frame itself"""
+        """Remove the video window if it exists"""
         if self.video_frame_label:
             self.video_frame_label.destroy()
             self.video_frame_label = None
-        # Do NOT unpack the video_frame itself, just ensure it's visible
-        self.video_frame.pack(side=tk.LEFT, fill=tk.Y)
-        self.video_frame.pack_propagate(False)  # Keep the frame from shrinking
+        
+        if self.video_window:
+            self.video_window.destroy()
+            self.video_window = None
 
     def update_native_plot(self):
         x, y, voiced = self.extract_smoothed_pitch(self.native_audio_path)
@@ -763,6 +862,9 @@ class PitchAccentApp:
             self.recording = False
             self.pending_recording = False
             
+            # Clear video window if exists
+            self.clear_video_frame()
+            
             # Destroy all matplotlib figures
             plt.close('all')
             
@@ -825,6 +927,20 @@ class PitchAccentApp:
             return delay_ms / 1000.0  # Convert to seconds
         except ValueError:
             return 0.0
+
+    def toggle_video_visibility(self):
+        """Toggle video window visibility based on checkbox state"""
+        if not hasattr(self, 'original_frame'):
+            return  # No video loaded yet
+            
+        if self.show_video_var.get():
+            # Show video if we have a frame stored
+            if hasattr(self, 'original_frame'):
+                height, width = self.original_frame.shape[:2]
+                self.display_video_frame_internal(self.original_frame, width, height)
+        else:
+            # Hide video window
+            self.clear_video_frame()
 
 
 if __name__ == "__main__":
