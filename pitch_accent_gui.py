@@ -90,6 +90,19 @@ class PitchAccentApp:
         self.play_button = tk.Button(control_frame, text="Play", command=self.toggle_native_playback, state=tk.DISABLED)
         self.play_button.pack(pady=2)
 
+        # Add delay control frame
+        delay_frame = tk.Frame(control_frame)
+        delay_frame.pack(pady=2)
+        tk.Label(delay_frame, text="Loop Delay:").pack(side=tk.LEFT)
+        self.delay_var = tk.StringVar(value="0")
+        self.delay_entry = tk.Entry(delay_frame, textvariable=self.delay_var, width=5)
+        self.delay_entry.pack(side=tk.LEFT, padx=2)
+        tk.Label(delay_frame, text="ms").pack(side=tk.LEFT)
+        
+        # Add validation to the entry
+        vcmd = (self.root.register(self.validate_delay), '%P')
+        self.delay_entry.config(validate='key', validatecommand=vcmd)
+
         tk.Label(control_frame, text="User Controls").pack(pady=(20, 0))
         self.record_frame = tk.Frame(control_frame)
         self.record_frame.pack(pady=2)
@@ -186,7 +199,7 @@ class PitchAccentApp:
         self.ax_user.set_xlabel("Time (s)")
         for ax in (self.ax_native, self.ax_user):
             ax.set_ylabel("Hz")
-            ax.set_ylim(50, 500)  # Set initial y-axis limits
+            ax.set_ylim(0, 500)  # Changed from 50 to 0
             ax.grid(True)
 
     def get_selected_devices(self):
@@ -318,7 +331,7 @@ class PitchAccentApp:
         self.ax_native.set_title("Native Speaker (Smoothed Pitch)")
         self.ax_native.set_ylabel("Hz")
         self.ax_native.set_xlim(0, x[-1] if len(x) > 0 else 0)
-        self.ax_native.set_ylim(50, 500)
+        self.ax_native.set_ylim(0, 500)
         self.ax_native.legend()
         self.ax_native.grid(True)
         self.canvas.draw()
@@ -369,6 +382,10 @@ class PitchAccentApp:
                     if self.playing:  # Check if we should continue looping
                         sd.stop()
                         self.update_playback_overlay(0)
+                        # Add the delay between loops
+                        loop_delay = self.get_loop_delay()
+                        if loop_delay > 0:
+                            time.sleep(loop_delay)
                 
             except Exception as e:
                 print(f"Error in audio playback: {e}")
@@ -416,7 +433,7 @@ class PitchAccentApp:
             
         self.ax_user.clear()
         self.ax_user.grid(True)
-        self.ax_user.set_ylim(50, 500)
+        self.ax_user.set_ylim(0, 500)
         self.ax_user.set_xlim(0, duration)  # Set x-axis to match expected duration
         self.ax_user.set_title("Your Recording (Real-time Pitch)")
         self.ax_user.set_ylabel("Hz")
@@ -456,7 +473,7 @@ class PitchAccentApp:
                     self.ax_user.grid(True)
                     self.ax_user.set_title("Your Recording (Real-time Pitch)")
                     self.ax_user.set_ylabel("Hz")
-                    self.ax_user.set_ylim(50, 500)
+                    self.ax_user.set_ylim(0, 500)
                     self.ax_user.set_xlim(0, duration)  # Keep the same duration throughout recording
                     
                     # Plot the continuous curve with base thickness and transparency
@@ -588,7 +605,7 @@ class PitchAccentApp:
         self.ax_user.set_title("Your Recording (Smoothed Pitch)")
         self.ax_user.set_ylabel("Hz")
         self.ax_user.set_xlabel("Time (s)")
-        self.ax_user.set_ylim(50, 500)
+        self.ax_user.set_ylim(0, 500)
         self.ax_user.legend()
         self.ax_user.grid(True)
         self.canvas.draw()
@@ -696,13 +713,31 @@ class PitchAccentApp:
                 self.ax_user.grid(True)
                 self.ax_user.set_title("Your Recording (Smoothed Pitch)")
                 self.ax_user.set_ylabel("Hz")
-                self.ax_user.set_ylim(50, 500)
+                self.ax_user.set_ylim(0, 500)
                 self.canvas.draw_idle()
                 
         except Exception as e:
             print(f"Error in finish_recording cleanup: {e}")
             import traceback
             traceback.print_exc()
+
+    def validate_delay(self, new_value):
+        """Validate the delay input to ensure it's a number between 0 and 5000"""
+        if new_value == "":
+            return True
+        try:
+            value = int(new_value)
+            return 0 <= value <= 5000
+        except ValueError:
+            return False
+
+    def get_loop_delay(self):
+        """Get the current loop delay in seconds"""
+        try:
+            delay_ms = int(self.delay_var.get() or "0")
+            return delay_ms / 1000.0  # Convert to seconds
+        except ValueError:
+            return 0.0
 
 
 if __name__ == "__main__":
