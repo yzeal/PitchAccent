@@ -313,17 +313,16 @@ class PitchAccentApp:
         output_index = self.output_devices[self.output_selector.current()]['index']
         return input_index, output_index
 
-    def extract_smoothed_pitch(self, path, f0_min=75, f0_max=500):
+    def extract_smoothed_pitch(self, path, f0_min=50, f0_max=500):
         snd = parselmouth.Sound(path)
         duration = snd.get_total_duration()
-        # Even finer time step
         pitch = snd.to_pitch(time_step=0.003, pitch_floor=f0_min, pitch_ceiling=f0_max)
         pitch_values = pitch.selected_array['frequency']
         confidence = pitch.selected_array['strength']
         times = pitch.xs()
 
-        # Even lower confidence threshold
-        voiced_mask = (confidence > 0.15) & (pitch_values > 0)  # Lowered from 0.3 to 0.15
+        # Extremely low confidence threshold
+        voiced_mask = (confidence > 0.05) & (pitch_values > 0)  # Lowered from 0.15 to 0.05
         voiced_indices = np.where(voiced_mask)[0]
         
         if len(voiced_indices) < 4:
@@ -345,7 +344,6 @@ class PitchAccentApp:
             y_dense = f_interp(x_dense)
 
             if len(y_dense) >= 13:
-                # Keep the same smoothing parameters to maintain curve smoothness
                 y_dense = savgol_filter(y_dense, window_length=13, polyorder=2)
 
             voiced_dense = np.zeros_like(x_dense, dtype=bool)
