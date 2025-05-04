@@ -25,10 +25,46 @@ class PitchAccentApp:
         self.root = root
         self.root.title("Pitch Accent Trainer")
         
-        # Set a larger initial window size
-        self.base_height = 1000  # Base window height without landscape video
-        self.landscape_height = 300  # Height to add for landscape videos
-        self.root.geometry(f"1800x{self.base_height}")  # Initial window size
+        # Get scaled dimensions and DPI scale factor
+        try:
+            import ctypes
+            PROCESS_PER_MONITOR_DPI_AWARE = 2
+            ctypes.windll.shcore.SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)
+            dpi = ctypes.windll.user32.GetDpiForSystem()
+            scale_factor = dpi / 96.0  # 96 is the base DPI
+        except Exception as e:
+            print(f"Error getting DPI scale: {e}")
+            scale_factor = 1.0
+
+        scaled_width = root.winfo_screenwidth()
+        scaled_height = root.winfo_screenheight()
+        
+        # Adjust base percentage based on scale factor
+        # For scale 1.0 (1080p): use 0.75 (75%) - increased from 0.65
+        # For scale 1.75 (4K): keep 0.47 (47%)
+        base_percentage = 0.75 if scale_factor == 1.0 else 0.47
+        scaled_percentage = base_percentage * scale_factor
+        
+        # Calculate width first
+        target_width = min(1800, int(scaled_width * scaled_percentage))
+        
+        # Calculate height with more vertical space
+        target_height = int(target_width * 0.6)
+        
+        print(f"Screen dimensions: {scaled_width}x{scaled_height}")
+        print(f"Windows scale factor: {scale_factor:.2f}")
+        print(f"Window dimensions: {target_width}x{target_height}")
+        
+        # Store dimensions for later use
+        self.base_height = target_height
+        self.landscape_height = int(target_height * 0.3)  # Scale landscape height relative to new height
+        
+        # Scale video dimensions proportionally
+        scale = target_width / 1800
+        self.portrait_video_width = int(400 * scale)
+        self.landscape_video_height = int(300 * scale)
+        self.max_video_width = int(800 * scale)
+        self.max_video_height = int(800 * scale)
         
         # Add proper cleanup on window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -73,9 +109,13 @@ class PitchAccentApp:
         self.setup_plot()
         self.root.bind('<r>', lambda event: self.toggle_recording())
 
-    def setup_gui(self):
-        self.root.geometry("1800x1000")
+        # Make window resizable
+        self.root.resizable(True, True)
+        
+        # Set the window size
+        self.root.geometry(f"{target_width}x{target_height}")
 
+    def setup_gui(self):
         # Create main top frame for controls
         top_frame = tk.Frame(self.root)
         top_frame.pack(side=tk.TOP, fill=tk.X)
@@ -397,24 +437,23 @@ class PitchAccentApp:
             traceback.print_exc()
 
     def display_video_frame_internal(self, frame_rgb, width, height):
-        """Internal method to handle the actual display of the video frame"""
         try:
             # Create new Toplevel window
             self.video_window = tk.Toplevel(self.root)
             self.video_window.title("Video Screenshot")
             
-            # Calculate initial dimensions
+            # Calculate initial dimensions using scaled values
             if height > width:  # Portrait
-                target_width = 400
+                target_width = self.portrait_video_width
                 target_height = int(target_width / self.aspect_ratio)
-                if target_height > 800:
-                    target_height = 800
+                if target_height > self.max_video_height:
+                    target_height = self.max_video_height
                     target_width = int(target_height * self.aspect_ratio)
             else:  # Landscape
-                target_height = 300
+                target_height = self.landscape_video_height
                 target_width = int(target_height * self.aspect_ratio)
-                if target_width > 800:
-                    target_width = 800
+                if target_width > self.max_video_width:
+                    target_width = self.max_video_width
                     target_height = int(target_width / self.aspect_ratio)
             
             # Set initial window size including padding
@@ -979,35 +1018,28 @@ class PitchAccentApp:
             self.clear_video_frame()
 
     def rotate_video_frame(self, angle):
-        """Rotate the video frame by the specified angle"""
         if not hasattr(self, 'original_frame'):
             return
-            
-        # Update current rotation
+        
         self.current_rotation = (self.current_rotation + angle) % 360
         
-        # First update window size based on new orientation
         if self.current_rotation in [90, 270]:
-            # For landscape orientation (after rotation)
             height, width = self.original_frame.shape[:2]
-            # Swap dimensions since we're rotating
-            self.aspect_ratio = height / width  # Note: swapped width/height
+            self.aspect_ratio = height / width
             
-            # Set new window size for landscape orientation
-            target_height = 400  # Match portrait width
+            target_height = self.portrait_video_width  # Use scaled value
             target_width = int(target_height * self.aspect_ratio)
-            if target_width > 800:  # Max width check
-                target_width = 800
+            if target_width > self.max_video_width:
+                target_width = self.max_video_width
                 target_height = int(target_width / self.aspect_ratio)
         else:
-            # For portrait orientation
             height, width = self.original_frame.shape[:2]
             self.aspect_ratio = width / height
             
-            target_width = 400
+            target_width = self.portrait_video_width  # Use scaled value
             target_height = int(target_width / self.aspect_ratio)
-            if target_height > 800:
-                target_height = 800
+            if target_height > self.max_video_height:
+                target_height = self.max_video_height
                 target_width = int(target_height * self.aspect_ratio)
         
         # Add padding and update window size
