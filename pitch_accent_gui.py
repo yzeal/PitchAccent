@@ -15,12 +15,17 @@ from moviepy.editor import AudioFileClip
 from scipy.interpolate import interp1d
 from scipy.signal import medfilt, savgol_filter
 import signal
+import cv2
+from PIL import Image, ImageTk
 
 class PitchAccentApp:
     def __init__(self, root):
         self.is_playing_thread_active = False
         self.root = root
         self.root.title("Pitch Accent Trainer")
+        
+        # Set a larger initial window size
+        self.root.geometry("1800x1000")  # Increased from 1600x1000
         
         # Add proper cleanup on window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -52,13 +57,16 @@ class PitchAccentApp:
 
         self.user_playing = False  # Add this to the initialization
 
+        self.video_frame_label = None  # Add this to store the video frame label
+
         self.setup_gui()
         self.setup_plot()
         self.root.bind('<r>', lambda event: self.toggle_recording())
 
     def setup_gui(self):
-        self.root.geometry("1600x1000")
+        self.root.geometry("1800x1000")
 
+        # Create main top frame for controls
         top_frame = tk.Frame(self.root)
         top_frame.pack(side=tk.TOP, fill=tk.X)
 
@@ -72,18 +80,31 @@ class PitchAccentApp:
         self.output_selector.current(0)
         self.output_selector.pack(side=tk.LEFT, padx=5)
 
-        middle_frame = tk.Frame(self.root)
-        middle_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
         self.loop_info_label = tk.Label(top_frame, text="Loop: Full clip", font=("Arial", 10))
         self.loop_info_label.pack(side=tk.RIGHT, padx=10)
 
-        plot_frame = tk.Frame(middle_frame)
+        # Create main content frame
+        main_frame = tk.Frame(self.root)
+        main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Create a horizontal container frame for video and plots
+        content_container = tk.Frame(main_frame)
+        content_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Create video frame (left side)
+        self.video_frame = tk.Frame(content_container, width=400)  # Set fixed width
+        self.video_frame.pack(side=tk.LEFT, fill=tk.Y)
+        self.video_frame.pack_propagate(False)  # Prevent frame from shrinking
+
+        # Create plot frame (center)
+        plot_frame = tk.Frame(content_container)
         plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        control_frame = tk.Frame(middle_frame)
+        # Create control frame (right side)
+        control_frame = tk.Frame(main_frame)
         control_frame.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Setup control frame contents
         tk.Label(control_frame, text="Native Controls").pack(pady=(10, 0))
         tk.Button(control_frame, text="Clear Loop Selection", command=self.clear_selection).pack(pady=2)
         tk.Button(control_frame, text="Load Native Audio", command=self.load_native).pack(pady=2)
@@ -111,9 +132,12 @@ class PitchAccentApp:
         self.play_user_button = tk.Button(control_frame, text="Play Your Recording", command=self.play_user_audio, state=tk.DISABLED)
         self.play_user_button.pack(pady=2)
 
+        # Create matplotlib figure and canvas
         self.fig, (self.ax_native, self.ax_user) = plt.subplots(2, 1, figsize=(12, 4), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Setup span selector
         self.span = SpanSelector(
             self.ax_native, 
             self.on_select_region, 
@@ -126,10 +150,8 @@ class PitchAccentApp:
         self.canvas.mpl_connect('button_press_event', self.on_mouse_down)
         self.canvas.mpl_connect('button_release_event', self.on_mouse_up)
         
-        # Add space bar binding for playback toggle
+        # Add keyboard bindings
         self.root.bind('<space>', lambda event: self.toggle_native_playback())
-        
-        # Keep existing 'r' binding for recording
         self.root.bind('<r>', lambda event: self.toggle_recording())
 
     def on_select_region(self, xmin, xmax):
@@ -293,16 +315,81 @@ class PitchAccentApp:
 
         ext = os.path.splitext(file_path)[1].lower()
         if ext in [".mp4", ".mov", ".avi"]:
+            # Handle video file
             audio = AudioFileClip(file_path)
             tmp_path = os.path.join(tempfile.gettempdir(), "native_audio.wav")
             audio.write_audiofile(tmp_path, codec='pcm_s16le')
             self.native_audio_path = tmp_path
+            
+            # Extract and display first frame
+            self.display_video_frame(file_path)
         else:
+            # Handle audio file
             self.native_audio_path = file_path
+            # For audio files, clear the video frame content but keep the frame visible
+            self.clear_video_frame()
 
         self.clear_selection()
         self.update_native_plot()
         self.play_button.config(state=tk.NORMAL)
+
+    def display_video_frame(self, video_path):
+        try:
+            # Clear any existing frame
+            self.clear_video_frame()
+            
+            # Read the first frame
+            cap = cv2.VideoCapture(video_path)
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Get video frame dimensions
+                video_frame_width = 400  # Fixed width for video frame
+                video_frame_height = self.root.winfo_height() - 100  # Account for top frame
+                
+                # Calculate target size maintaining aspect ratio
+                height, width = frame_rgb.shape[:2]
+                aspect_ratio = width / height
+                
+                # Calculate dimensions to fit in video frame
+                if width / height > video_frame_width / video_frame_height:
+                    # Width limited
+                    target_width = video_frame_width - 20  # Account for padding
+                    target_height = int(target_width / aspect_ratio)
+                else:
+                    # Height limited
+                    target_height = video_frame_height - 20  # Account for padding
+                    target_width = int(target_height * aspect_ratio)
+                
+                # Resize frame
+                frame_resized = cv2.resize(frame_rgb, (target_width, target_height))
+                
+                # Convert to PhotoImage
+                image = Image.fromarray(frame_resized)
+                photo = ImageTk.PhotoImage(image)
+                
+                # Create and display label
+                self.video_frame_label = tk.Label(self.video_frame, image=photo)
+                self.video_frame_label.image = photo  # Keep a reference
+                self.video_frame_label.pack(expand=True)
+                
+        except Exception as e:
+            print(f"Error displaying video frame: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def clear_video_frame(self):
+        """Remove the video frame label if it exists, but keep the frame itself"""
+        if self.video_frame_label:
+            self.video_frame_label.destroy()
+            self.video_frame_label = None
+        # Do NOT unpack the video_frame itself, just ensure it's visible
+        self.video_frame.pack(side=tk.LEFT, fill=tk.Y)
+        self.video_frame.pack_propagate(False)  # Keep the frame from shrinking
 
     def update_native_plot(self):
         x, y, voiced = self.extract_smoothed_pitch(self.native_audio_path)
