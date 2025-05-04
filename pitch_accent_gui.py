@@ -183,6 +183,27 @@ class PitchAccentApp:
         vcmd = (self.root.register(self.validate_delay), '%P')
         self.delay_entry.config(validate='key', validatecommand=vcmd)
 
+        # Add speed control after the delay control
+        speed_frame = tk.Frame(control_frame)
+        speed_frame.pack(pady=2)
+        tk.Label(speed_frame, text="Playback Speed:").pack(side=tk.TOP)
+        
+        # Add speed value label
+        self.speed_label = tk.Label(speed_frame, text="100%")
+        self.speed_label.pack(side=tk.TOP)
+        
+        # Add slider
+        self.speed_var = tk.DoubleVar(value=100)
+        self.speed_slider = ttk.Scale(
+            speed_frame,
+            from_=50,
+            to=100,
+            orient=tk.HORIZONTAL,
+            variable=self.speed_var,
+            command=self.update_speed_label
+        )
+        self.speed_slider.pack(side=tk.TOP)
+
         tk.Label(control_frame, text="User Controls").pack(pady=(20, 0))
         self.record_frame = tk.Frame(control_frame)
         self.record_frame.pack(pady=2)
@@ -608,12 +629,16 @@ class PitchAccentApp:
         self.playing = not self.playing
         if self.playing:
             self.play_button.config(text="Stop")
+            # Disable the speed slider during playback
+            self.speed_slider.state(['disabled'])
+            self.speed_slider.configure(state='disabled')  # For extra compatibility
             threading.Thread(target=self.loop_native_audio, daemon=True).start()
         else:
             self.play_button.config(text="Play")
+            # Re-enable the speed slider when stopped
+            self.speed_slider.state(['!disabled'])
+            self.speed_slider.configure(state='normal')
             sd.stop()
-            # Let the loop_native_audio handle the overlay removal
-            # since it's already in its finally block
 
     def loop_native_audio(self):
         with self.playback_lock:
@@ -629,8 +654,21 @@ class PitchAccentApp:
                     end_sample = int(self._loop_end * sr) if self._loop_end else len(snd.values[0])
                 
                 y = snd.values[0][start_sample:end_sample]
-                duration = (end_sample - start_sample) / sr
-                self.native_duration = duration
+                original_duration = (end_sample - start_sample) / sr
+                
+                # Apply speed adjustment
+                speed_factor = self.speed_var.get() / 100.0
+                if speed_factor < 1.0:
+                    # Resample the audio to change speed while preserving pitch
+                    from scipy import signal
+                    new_len = int(len(y) / speed_factor)
+                    y = signal.resample(y, new_len)
+                    # Adjust duration for overlay
+                    duration = original_duration / speed_factor
+                else:
+                    duration = original_duration
+                
+                self.native_duration = duration  # Store the adjusted duration
                 total_samples = len(y)
 
                 _, output_index = self.get_selected_devices()
@@ -642,18 +680,20 @@ class PitchAccentApp:
                     current_position = [0]
                     last_update_time = [time.time()]
                     
-                    def callback(outdata, frames, time_info, status):  # Fixed parameter name
+                    def callback(outdata, frames, time_info, status):
                         if status:
                             print(f'Playback callback status: {status}')
                         
                         current_position[0] += frames
                         
                         # Update overlay at most 30 times per second
-                        current_wall_time = time.time()  # Use time.time() instead of parameter
+                        current_wall_time = time.time()
                         if current_wall_time - last_update_time[0] >= 1/30:
-                            # Calculate position in seconds
+                            # Calculate position in seconds, accounting for speed
                             playback_time = (current_position[0] / total_samples) * duration
-                            self.root.after_idle(lambda t=playback_time: self.update_playback_overlay(t))
+                            # Convert playback time back to original time scale for overlay
+                            original_time = playback_time * speed_factor
+                            self.root.after_idle(lambda t=original_time: self.update_playback_overlay(t))
                             last_update_time[0] = current_wall_time
 
                     # Start playback with callback
@@ -664,10 +704,9 @@ class PitchAccentApp:
                         while current_position[0] < total_samples and self.playing:
                             sd.sleep(10)
                     
-                    if self.playing:  # Check if we should continue looping
+                    if self.playing:
                         sd.stop()
                         self.update_playback_overlay(0)
-                        # Add the delay between loops
                         loop_delay = self.get_loop_delay()
                         if loop_delay > 0:
                             time.sleep(loop_delay)
@@ -678,16 +717,19 @@ class PitchAccentApp:
                 traceback.print_exc()
             finally:
                 self.is_playing_thread_active = False
-                # Safely remove overlay when playback thread ends
-                def safe_remove_overlay():
+                def safe_cleanup():
                     try:
+                        # Re-enable slider
+                        self.speed_slider.state(['!disabled'])
+                        self.speed_slider.configure(state='normal')
+                        # Remove overlay
                         if hasattr(self, 'overlay_patch') and self.overlay_patch in self.ax_native.patches:
                             self.overlay_patch.remove()
                             self.canvas.draw_idle()
                     except Exception as e:
-                        print(f"Error removing overlay: {e}")
+                        print(f"Error in cleanup: {e}")
                 
-                self.root.after(0, safe_remove_overlay)
+                self.root.after(0, safe_cleanup)
 
     def update_playback_overlay(self, current_time):
         try:
@@ -1113,6 +1155,11 @@ class PitchAccentApp:
             self.load_file(file_path)
         else:
             messagebox.showerror("Error", "Unsupported file type. Please use .wav, .mp3, .mp4, .mov, or .avi files.")
+
+    def update_speed_label(self, *args):
+        """Update the label showing current playback speed"""
+        speed = int(self.speed_var.get())
+        self.speed_label.config(text=f"{speed}%")
 
 
 if __name__ == "__main__":
