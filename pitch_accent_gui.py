@@ -17,6 +17,7 @@ from scipy.signal import medfilt, savgol_filter
 import signal
 import cv2
 from PIL import Image, ImageTk
+from tkinterdnd2 import *  # For drag & drop support
 
 class PitchAccentApp:
     def __init__(self, root):
@@ -63,6 +64,10 @@ class PitchAccentApp:
         self.video_frame_label = None  # Store reference to video label
 
         self.show_video_var = tk.BooleanVar(value=True)  # Default to showing video
+
+        # Enable drag & drop
+        self.root.drop_target_register(DND_FILES)
+        self.root.dnd_bind('<<Drop>>', self.on_drop)
 
         self.setup_gui()
         self.setup_plot()
@@ -322,10 +327,13 @@ class PitchAccentApp:
                 threading.Thread(target=self.loop_native_audio, daemon=True).start()
             self.root.after(200, safe_restart)
 
-    def load_native(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Audio/Video files", "*.wav *.mp3 *.mp4 *.mov *.avi")])
+    def load_file(self, file_path):
+        """Common file loading logic for both drag & drop and button"""
         if not file_path:
             return
+
+        # Clear any existing video window first
+        self.clear_video_frame()
 
         ext = os.path.splitext(file_path)[1].lower()
         if ext in [".mp4", ".mov", ".avi"]:
@@ -352,14 +360,18 @@ class PitchAccentApp:
         else:
             # Handle audio file
             self.native_audio_path = file_path
-            # Clear any existing video frame
+            # Clear any existing video frame data
             if hasattr(self, 'original_frame'):
                 delattr(self, 'original_frame')
-            self.clear_video_frame()
 
         self.clear_selection()
         self.update_native_plot()
         self.play_button.config(state=tk.NORMAL)
+
+    def load_native(self):
+        """Modified to use common loading logic"""
+        file_path = filedialog.askopenfilename(filetypes=[("Audio/Video files", "*.wav *.mp3 *.mp4 *.mov *.avi")])
+        self.load_file(file_path)
 
     def display_video_frame(self, video_path):
         """Legacy method - now just handles initial video loading"""
@@ -982,7 +994,7 @@ class PitchAccentApp:
             self.aspect_ratio = height / width  # Note: swapped width/height
             
             # Set new window size for landscape orientation
-            target_height = 300  # Same as initial landscape height
+            target_height = 400  # Match portrait width
             target_width = int(target_height * self.aspect_ratio)
             if target_width > 800:  # Max width check
                 target_width = 800
@@ -1022,9 +1034,24 @@ class PitchAccentApp:
         self.video_frame_label.configure(image=photo)
         self.video_frame_label.image = photo  # Keep a reference
 
+    def on_drop(self, event):
+        """Handle files dropped onto the main window"""
+        file_path = event.data
+        
+        # Remove curly braces if present (Windows can add these)
+        file_path = file_path.strip('{}')
+        
+        # Check if it's a supported file type
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in [".wav", ".mp3", ".mp4", ".mov", ".avi"]:
+            # Use the existing load_native logic, but with the dropped file path
+            self.load_file(file_path)
+        else:
+            messagebox.showerror("Error", "Unsupported file type. Please use .wav, .mp3, .mp4, .mov, or .avi files.")
+
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    root = TkinterDnD.Tk()  # Use DnD-aware Tk instead of regular Tk
     app = PitchAccentApp(root)
     try:
         root.mainloop()
