@@ -101,12 +101,18 @@ class PitchAccentApp:
         self.fig, (self.ax_native, self.ax_user) = plt.subplots(2, 1, figsize=(12, 8), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        self.span = SpanSelector(self.ax_native, self.on_select_region, 'horizontal', useblit=True, props=dict(alpha=0.3, facecolor='blue'), interactive=True)
+        self.span = SpanSelector(
+            self.ax_native, 
+            self.on_select_region, 
+            'horizontal', 
+            useblit=True, 
+            props=dict(alpha=0.3, facecolor='blue'), 
+            interactive=True
+        )
         self.span_active = False
         self.canvas.mpl_connect('button_press_event', self.on_mouse_down)
         self.canvas.mpl_connect('button_release_event', self.on_mouse_up)
         self.canvas.mpl_connect('button_press_event', self.on_click_outside)
-
 
     def on_select_region(self, xmin, xmax):
         if self.is_playing_thread_active:
@@ -163,9 +169,6 @@ class PitchAccentApp:
     def on_mouse_up(self, event):
         if self.span_active:
             self.span_active = False
-            # Re-enable the SpanSelector
-            if hasattr(self, 'span'):
-                self.span.active = True
 
     def on_click_outside(self, event):
         if event.inaxes != self.ax_native:
