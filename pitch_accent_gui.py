@@ -657,50 +657,44 @@ class PitchAccentApp:
                 # Apply speed adjustment
                 speed_factor = self.speed_var.get() / 100.0
                 if speed_factor < 1.0:
-                    # Resample the audio to change speed while preserving pitch
                     from scipy import signal
                     new_len = int(len(y) / speed_factor)
                     y = signal.resample(y, new_len)
-                    # Adjust duration for overlay
                     duration = original_duration / speed_factor
                 else:
                     duration = original_duration
                 
-                self.native_duration = duration  # Store the adjusted duration
-                total_samples = len(y)
-
+                self.native_duration = duration
                 _, output_index = self.get_selected_devices()
 
                 while self.playing:
-                    self.last_native_loop_time = time.time()
+                    # Start precise timing thread
+                    start_time = time.perf_counter()
+                    playback_active = {'active': True}
                     
-                    # Create a callback to track actual playback position
-                    current_position = [0]
-                    last_update_time = [time.time()]
+                    def update_overlay():
+                        while playback_active['active'] and self.playing:
+                            current_time = time.perf_counter() - start_time
+                            if current_time <= duration:
+                                # Convert to original time scale
+                                display_time = current_time * speed_factor
+                                self.root.after_idle(
+                                    lambda t=display_time: self.update_playback_overlay(t)
+                                )
+                            time.sleep(0.02)  # 20ms updates
                     
-                    def callback(outdata, frames, time_info, status):
-                        if status:
-                            print(f'Playback callback status: {status}')
-                        
-                        current_position[0] += frames
-                        
-                        # Update overlay at most 30 times per second
-                        current_wall_time = time.time()
-                        if current_wall_time - last_update_time[0] >= 1/30:
-                            # Calculate position in seconds, accounting for speed
-                            playback_time = (current_position[0] / total_samples) * duration
-                            # Convert playback time back to original time scale for overlay
-                            original_time = playback_time * speed_factor
-                            self.root.after_idle(lambda t=original_time: self.update_playback_overlay(t))
-                            last_update_time[0] = current_wall_time
-
-                    # Start playback with callback
-                    with sd.OutputStream(samplerate=sr, channels=1, callback=callback,
-                                      finished_callback=lambda: print("Stream finished"),
-                                      device=output_index):
-                        sd.play(y, sr, device=output_index)
-                        while current_position[0] < total_samples and self.playing:
-                            sd.sleep(10)
+                    # Start timing thread
+                    timing_thread = threading.Thread(target=update_overlay, daemon=True)
+                    timing_thread.start()
+                    
+                    # Play audio normally
+                    sd.play(y, sr, device=output_index)
+                    while sd.get_stream().active and self.playing:
+                        sd.sleep(10)
+                    
+                    # Stop timing thread
+                    playback_active['active'] = False
+                    timing_thread.join(timeout=0.1)
                     
                     if self.playing:
                         sd.stop()
@@ -717,10 +711,6 @@ class PitchAccentApp:
                 self.is_playing_thread_active = False
                 def safe_cleanup():
                     try:
-                        # Re-enable slider
-                        self.speed_slider.state(['!disabled'])
-                        self.speed_slider.configure(state='normal')
-                        # Remove overlay
                         if hasattr(self, 'overlay_patch') and self.overlay_patch in self.ax_native.patches:
                             self.overlay_patch.remove()
                             self.canvas.draw_idle()
