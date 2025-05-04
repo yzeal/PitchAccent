@@ -112,7 +112,6 @@ class PitchAccentApp:
         self.span_active = False
         self.canvas.mpl_connect('button_press_event', self.on_mouse_down)
         self.canvas.mpl_connect('button_release_event', self.on_mouse_up)
-        self.canvas.mpl_connect('button_press_event', self.on_click_outside)
 
     def on_select_region(self, xmin, xmax):
         if self.is_playing_thread_active:
@@ -156,6 +155,7 @@ class PitchAccentApp:
         self.root.after(100, safe_restart)
 
     def on_mouse_down(self, event):
+        # Only handle playback state, remove the SpanSelector clearing
         if self.playing:
             self.was_playing = True  # Store the playing state
             self.playing = False
@@ -169,12 +169,10 @@ class PitchAccentApp:
     def on_mouse_up(self, event):
         if self.span_active:
             self.span_active = False
-
-    def on_click_outside(self, event):
-        if event.inaxes != self.ax_native:
-            return
-        if self._loop_end is not None and (event.xdata < self._loop_start or event.xdata > self._loop_end):
-            self.clear_selection()
+            # Add click outside check here instead
+            if event.inaxes == self.ax_native:
+                if self._loop_end is not None and (event.xdata < self._loop_start or event.xdata > self._loop_end):
+                    self.clear_selection()
 
     def setup_plot(self):
         self.ax_native.set_title("Native Speaker (Smoothed Pitch)")
@@ -241,7 +239,7 @@ class PitchAccentApp:
                     self.selection_patch.remove()
                     self.selection_patch = None
                 
-                # Clear the SpanSelector's visual selection
+                # Only clear the SpanSelector here, not during regular selection changes
                 if hasattr(self, 'span'):
                     self.span.clear()
                     
@@ -256,7 +254,7 @@ class PitchAccentApp:
                 self.playing = True
                 self.play_button.config(text="Stop")
                 threading.Thread(target=self.loop_native_audio, daemon=True).start()
-            self.root.after(200, safe_restart)  # Use after() to ensure UI is responsive
+            self.root.after(200, safe_restart)
 
     def load_native(self):
         file_path = filedialog.askopenfilename(filetypes=[("Audio/Video files", "*.wav *.mp3 *.mp4 *.mov *.avi")])
