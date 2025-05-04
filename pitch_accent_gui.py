@@ -201,9 +201,12 @@ class PitchAccentApp:
         confidence = pitch.selected_array['strength']
         times = pitch.xs()
 
-        voiced_indices = np.where((confidence > 0.7) & (pitch_values > 0))[0]
+        # Get voiced segments
+        voiced_mask = (confidence > 0.7) & (pitch_values > 0)
+        voiced_indices = np.where(voiced_mask)[0]
+        
         if len(voiced_indices) < 4:
-            return times, pitch_values
+            return times, pitch_values, voiced_mask
 
         n_points = max(4, int(duration * 10))
         step = max(1, len(voiced_indices) // n_points)
@@ -223,9 +226,16 @@ class PitchAccentApp:
             if len(y_dense) >= 11:
                 y_dense = savgol_filter(y_dense, window_length=11, polyorder=2)
 
-            return x_dense, y_dense
+            # Create voiced mask for interpolated points
+            voiced_dense = np.zeros_like(x_dense, dtype=bool)
+            for i, x in enumerate(x_dense):
+                # Find nearest original time point
+                nearest_idx = np.abs(times - x).argmin()
+                voiced_dense[i] = voiced_mask[nearest_idx]
+
+            return x_dense, y_dense, voiced_dense
         else:
-            return x_sparse, y_sparse
+            return x_sparse, y_sparse, np.ones_like(x_sparse, dtype=bool)
 
     def clear_selection(self):
         # First stop any ongoing playback
@@ -281,9 +291,28 @@ class PitchAccentApp:
         self.play_button.config(state=tk.NORMAL)
 
     def update_native_plot(self):
-        x, y = self.extract_smoothed_pitch(self.native_audio_path)
+        x, y, voiced = self.extract_smoothed_pitch(self.native_audio_path)
         self.ax_native.clear()
-        self.ax_native.plot(x, y, label="Native", linewidth=2)
+        
+        # Plot the continuous curve with base thickness and transparency
+        line, = self.ax_native.plot(x, y, color='blue', linewidth=1.5, alpha=0.2, label="Native")
+        
+        # Find the boundaries of voiced segments
+        voiced_ranges = []
+        start_idx = None
+        for i in range(len(voiced)):
+            if voiced[i] and start_idx is None:
+                start_idx = i
+            elif not voiced[i] and start_idx is not None:
+                voiced_ranges.append((start_idx, i))
+                start_idx = None
+        if start_idx is not None:
+            voiced_ranges.append((start_idx, len(voiced)))
+            
+        # Plot each voiced segment separately with increased thickness
+        for start, end in voiced_ranges:
+            self.ax_native.plot(x[start:end], y[start:end], color='blue', linewidth=9, solid_capstyle='round')
+        
         self.overlay_patch = self.ax_native.axvspan(0, 0, color='gray', alpha=0.2)
         self.ax_native.set_title("Native Speaker (Smoothed Pitch)")
         self.ax_native.set_ylabel("Hz")
@@ -415,7 +444,7 @@ class PitchAccentApp:
                     wavfile.write(temp_file, fs, all_audio)
                     
                     # Extract pitch
-                    x, y = self.extract_smoothed_pitch(temp_file)
+                    x, y, voiced = self.extract_smoothed_pitch(temp_file)
                     current_time = len(frames) * chunk_samples / fs
                     
                     # Update plot
@@ -425,9 +454,24 @@ class PitchAccentApp:
                     self.ax_user.set_ylabel("Hz")
                     self.ax_user.set_ylim(50, 500)
                     
-                    # Plot the pitch curve
-                    self.ax_user.plot(x, y, color='orange', linewidth=2)
-                    self.ax_user.set_xlim(max(0, current_time - 5), current_time + 1)
+                    # Plot the continuous curve with base thickness and transparency
+                    line, = self.ax_user.plot(x, y, color='orange', linewidth=1.5, alpha=0.2)
+                    
+                    # Find the boundaries of voiced segments
+                    voiced_ranges = []
+                    start_idx = None
+                    for i in range(len(voiced)):
+                        if voiced[i] and start_idx is None:
+                            start_idx = i
+                        elif not voiced[i] and start_idx is not None:
+                            voiced_ranges.append((start_idx, i))
+                            start_idx = None
+                    if start_idx is not None:
+                        voiced_ranges.append((start_idx, len(voiced)))
+                        
+                    # Plot each voiced segment separately with increased thickness
+                    for start, end in voiced_ranges:
+                        self.ax_user.plot(x[start:end], y[start:end], color='orange', linewidth=9, solid_capstyle='round')
                     
                     # Add recording indicator as fixed annotation
                     self.recording_indicator = self.ax_user.annotate(
@@ -514,9 +558,28 @@ class PitchAccentApp:
             self.pending_recording = False  # Make sure to reset in case of setup error
 
     def update_user_plot(self):
-        x, y = self.extract_smoothed_pitch(self.user_audio_path)
+        x, y, voiced = self.extract_smoothed_pitch(self.user_audio_path)
         self.ax_user.clear()
-        self.ax_user.plot(x, y, label="User", color="orange", linewidth=2)
+        
+        # Plot the continuous curve with base thickness and transparency
+        line, = self.ax_user.plot(x, y, color='orange', linewidth=1.5, alpha=0.2, label="User")
+        
+        # Find the boundaries of voiced segments
+        voiced_ranges = []
+        start_idx = None
+        for i in range(len(voiced)):
+            if voiced[i] and start_idx is None:
+                start_idx = i
+            elif not voiced[i] and start_idx is not None:
+                voiced_ranges.append((start_idx, i))
+                start_idx = None
+        if start_idx is not None:
+            voiced_ranges.append((start_idx, len(voiced)))
+            
+        # Plot each voiced segment separately with increased thickness
+        for start, end in voiced_ranges:
+            self.ax_user.plot(x[start:end], y[start:end], color='orange', linewidth=9, solid_capstyle='round')
+        
         self.ax_user.set_title("Your Recording (Smoothed Pitch)")
         self.ax_user.set_ylabel("Hz")
         self.ax_user.set_xlabel("Time (s)")
