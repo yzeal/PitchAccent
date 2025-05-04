@@ -446,6 +446,13 @@ class PitchAccentApp:
             self.video_window.protocol("WM_DELETE_WINDOW", 
                 lambda: (self.clear_video_frame(), self.show_video_var.set(False)))
             
+            # Store the original frame and current rotation
+            self.current_rotation = 0  # 0, 90, 180, 270 degrees
+            
+            # Bind keyboard shortcuts for rotation
+            self.video_window.bind('<Left>', lambda e: self.rotate_video_frame(-90))  # Counter-clockwise
+            self.video_window.bind('<Right>', lambda e: self.rotate_video_frame(90))  # Clockwise
+            
         except Exception as e:
             print(f"Error displaying video frame: {e}")
             import traceback
@@ -467,7 +474,24 @@ class PitchAccentApp:
                 target_width = new_width
                 target_height = int(target_width / self.aspect_ratio)
             
-            self.resize_video_frame(target_width, target_height)
+            # First rotate the frame according to current rotation
+            if self.current_rotation == 90:
+                frame_to_resize = cv2.rotate(self.original_frame, cv2.ROTATE_90_CLOCKWISE)
+            elif self.current_rotation == 180:
+                frame_to_resize = cv2.rotate(self.original_frame, cv2.ROTATE_180)
+            elif self.current_rotation == 270:
+                frame_to_resize = cv2.rotate(self.original_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            else:
+                frame_to_resize = self.original_frame.copy()
+            
+            # Then resize the rotated frame
+            frame_resized = cv2.resize(frame_to_resize, (target_width, target_height))
+            image = Image.fromarray(frame_resized)
+            photo = ImageTk.PhotoImage(image)
+            
+            # Update the label
+            self.video_frame_label.configure(image=photo)
+            self.video_frame_label.image = photo  # Keep a reference
 
     def resize_video_frame(self, width, height):
         if hasattr(self, 'original_frame'):
@@ -941,6 +965,62 @@ class PitchAccentApp:
         else:
             # Hide video window
             self.clear_video_frame()
+
+    def rotate_video_frame(self, angle):
+        """Rotate the video frame by the specified angle"""
+        if not hasattr(self, 'original_frame'):
+            return
+            
+        # Update current rotation
+        self.current_rotation = (self.current_rotation + angle) % 360
+        
+        # First update window size based on new orientation
+        if self.current_rotation in [90, 270]:
+            # For landscape orientation (after rotation)
+            height, width = self.original_frame.shape[:2]
+            # Swap dimensions since we're rotating
+            self.aspect_ratio = height / width  # Note: swapped width/height
+            
+            # Set new window size for landscape orientation
+            target_height = 300  # Same as initial landscape height
+            target_width = int(target_height * self.aspect_ratio)
+            if target_width > 800:  # Max width check
+                target_width = 800
+                target_height = int(target_width / self.aspect_ratio)
+        else:
+            # For portrait orientation
+            height, width = self.original_frame.shape[:2]
+            self.aspect_ratio = width / height
+            
+            target_width = 400
+            target_height = int(target_width / self.aspect_ratio)
+            if target_height > 800:
+                target_height = 800
+                target_width = int(target_height * self.aspect_ratio)
+        
+        # Add padding and update window size
+        window_width = target_width + 40
+        window_height = target_height + 60
+        self.video_window.geometry(f"{window_width}x{window_height}")
+        
+        # Now rotate the image
+        if self.current_rotation == 90:
+            rotated = cv2.rotate(self.original_frame, cv2.ROTATE_90_CLOCKWISE)
+        elif self.current_rotation == 180:
+            rotated = cv2.rotate(self.original_frame, cv2.ROTATE_180)
+        elif self.current_rotation == 270:
+            rotated = cv2.rotate(self.original_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        else:
+            rotated = self.original_frame.copy()
+        
+        # Resize and display the rotated frame
+        frame_resized = cv2.resize(rotated, (target_width, target_height))
+        image = Image.fromarray(frame_resized)
+        photo = ImageTk.PhotoImage(image)
+        
+        # Update the label
+        self.video_frame_label.configure(image=photo)
+        self.video_frame_label.image = photo  # Keep a reference
 
 
 if __name__ == "__main__":
