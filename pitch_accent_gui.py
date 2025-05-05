@@ -113,6 +113,8 @@ class PitchAccentApp:
         self.root.drop_target_register(DND_FILES)
         self.root.dnd_bind('<<Drop>>', self.on_drop)
 
+        self.max_recording_time = 10  # seconds
+
         self.setup_gui()
         self.setup_plot()
         self.root.bind('<r>', lambda event: self.toggle_recording())
@@ -745,7 +747,15 @@ class PitchAccentApp:
             print(f"Overlay update error: {e}")
 
     def toggle_recording(self):
-        self.record_audio()
+        if self.recording or self.pending_recording:
+            # Stop current recording
+            self.recording = False
+            self.pending_recording = False
+            # Let the recording thread finish and cleanup
+            self.root.after(100, self.finish_recording)
+        else:
+            # Start new recording
+            self.record_audio()
 
     def record_audio(self):
         if self.recording or self.pending_recording:
@@ -755,13 +765,8 @@ class PitchAccentApp:
         with self.recording_lock:  # Protect recording state
             self.recording = True
             
-        with self.selection_lock:  # Safely get current selection state
-            current_loop_start = self._loop_start
-            current_loop_end = self._loop_end
-            
         # Calculate the expected duration first
-        padding = 2.0
-        duration = (self.native_duration + padding) if hasattr(self, 'native_duration') else 6
+        duration = self.max_recording_time
             
         self.ax_user.clear()
         self.ax_user.grid(True)
@@ -771,21 +776,50 @@ class PitchAccentApp:
         self.ax_user.set_ylabel("Hz")
         self.canvas.draw()
         
-        # Disable both recording and playback buttons
-        self.record_button.pack_forget()
+        # Update UI for recording state
+        self.record_button.config(text="Stop Recording")
         self.play_user_button.config(state=tk.DISABLED)
-        self.countdown_label = tk.Label(self.record_frame, text="Recording...", font=("Arial", 12))
-        self.countdown_label.pack(pady=2)
-        self.record_button.config(state=tk.DISABLED)
+
+        # Get the plot's position in the figure
+        bbox = self.ax_user.get_position()
+        
+        # Create an overlay frame for the recording indicator and countdown
+        if not hasattr(self, 'overlay_frame'):
+            # Use the figure canvas as the parent instead of the canvas widget
+            self.overlay_frame = tk.Frame(self.canvas.get_tk_widget(), bg='')
+            self.recording_dot_label = tk.Label(self.overlay_frame, text='●', fg='red', bg='white', font=('Arial', 35))
+            self.countdown_label = tk.Label(self.overlay_frame, fg='red', bg='white', font=('Arial', 16))
+            self.recording_dot_label.pack(side=tk.LEFT, padx=(5,0), pady=(0,6))
+            self.countdown_label.pack(side=tk.LEFT)
+
+        # Calculate position in canvas coordinates
+        canvas_width = self.canvas.get_tk_widget().winfo_width()
+        canvas_height = self.canvas.get_tk_widget().winfo_height()
+        
+        # Position relative to the plot area
+        x_pos = int(bbox.x0 * canvas_width + 15)  # Add 20 pixels padding from left
+        y_pos = int(bbox.y1 * canvas_height + 85)  # Subtract 30 pixels from top
+        
+        self.overlay_frame.place(x=x_pos, y=y_pos)
+        self.overlay_frame.lift()  # Ensure it's on top
+
+        def update_countdown(start_time):
+            if self.recording:  # Only update if still recording
+                remaining = max(0, int(duration - (time.time() - start_time)))
+                self.countdown_label.config(text=f'{remaining}s')
+                if remaining > 0 and self.recording:
+                    self.root.after(100, update_countdown, start_time)
+                elif remaining <= 0:
+                    self.recording = False  # Stop recording when time is up
 
         try:
             input_index, _ = self.get_selected_devices()
             fs = 22050
-            chunk_duration = 0.2  # Reduced from 0.5s to 0.2s for more frequent updates
+            chunk_duration = 0.2
             chunk_samples = int(fs * chunk_duration)
             frames = []
             pitch_buffer = []
-            
+
             def update_realtime_pitch():
                 if not frames:  # No audio data yet
                     return
@@ -806,7 +840,7 @@ class PitchAccentApp:
                     self.ax_user.set_title("Your Recording (Real-time Pitch)")
                     self.ax_user.set_ylabel("Hz")
                     self.ax_user.set_ylim(0, 500)
-                    self.ax_user.set_xlim(0, duration)  # Keep the same duration throughout recording
+                    self.ax_user.set_xlim(0, duration)
                     
                     # Plot the continuous curve with base thickness and transparency
                     line, = self.ax_user.plot(x, y, color='orange', linewidth=1.5, alpha=0.2)
@@ -827,16 +861,6 @@ class PitchAccentApp:
                     for start, end in voiced_ranges:
                         self.ax_user.plot(x[start:end], y[start:end], color='orange', linewidth=9, solid_capstyle='round')
                     
-                    # Add recording indicator as fixed annotation
-                    self.recording_indicator = self.ax_user.annotate(
-                        '●',  # Unicode bullet point as dot
-                        xy=(0.01, 0.93),  # Position in axes coordinates (0-1)
-                        xycoords='axes fraction',  # Use relative coordinates
-                        color='red',
-                        fontsize=20,
-                        annotation_clip=False  # Ensure it's always visible
-                    )
-                    
                     self.canvas.draw_idle()
                     
                 except Exception as e:
@@ -846,70 +870,50 @@ class PitchAccentApp:
 
             def callback(indata, frames_, time_, status):
                 if status:
-                    # Only keep critical error messages
                     if status.error():
                         print(f"Critical error in audio callback: {status}")
                 
-                # Append the new audio chunk
                 frames.append(indata.copy())
                 
-                # Update visualization every chunk_duration seconds
                 if len(frames) * chunk_samples / fs >= len(pitch_buffer) * chunk_duration:
                     self.root.after(1, update_realtime_pitch)
 
-            def update_countdown(start_time):
-                remaining = max(0, int(duration - (time.time() - start_time)))
-                self.countdown_label.config(text=f"Recording... {remaining}s")
-                if remaining > 0 and self.recording:
-                    self.root.after(1000, update_countdown, start_time)
-
             def start_recording():
                 nonlocal frames
-                frames = []  # Reset frames
+                frames = []
                 
                 try:
-                    # Reset pending_recording state at the start
                     self.pending_recording = False
-                    
+                    start_time = time.time()
+                    update_countdown(start_time)  # Start countdown
+
                     with sd.InputStream(samplerate=fs, channels=1, dtype='float32',
                                       callback=callback, device=input_index,
                                       blocksize=chunk_samples):
-                        start_time = time.time()
-                        update_countdown(start_time)
                         while time.time() - start_time < duration and self.recording:
                             sd.sleep(50)
                             
                     if frames:
                         audio = np.concatenate(frames, axis=0).squeeze()
                         wavfile.write(self.user_audio_path, fs, audio)
-                        # Schedule UI updates in main thread
                         self.root.after(0, lambda: self.finish_recording())
                     
                 except Exception as e:
                     print(f"Error in start_recording: {e}")
-                    import traceback
                     traceback.print_exc()
-                    # Schedule cleanup in main thread even on error
                     self.root.after(0, lambda: self.finish_recording())
                 finally:
                     self.recording = False
                     self.pending_recording = False
 
-            if self.playing and self.last_native_loop_time:
-                now = time.time()
-                time_since_loop = now - self.last_native_loop_time
-                time_until_next_loop = self.native_duration - (time_since_loop % self.native_duration)
-                self.pending_recording = True  # Set the pending flag
-                threading.Timer(time_until_next_loop, start_recording).start()
-            else:
-                threading.Thread(target=start_recording, daemon=True).start()
+            # Start the recording process
+            threading.Thread(target=start_recording, daemon=True).start()
 
         except Exception as e:
             print(f"Recording setup error: {e}")
-            import traceback
             traceback.print_exc()
             self.recording = False
-            self.pending_recording = False  # Make sure to reset in case of setup error
+            self.pending_recording = False
 
     def update_user_plot(self):
         x, y, voiced = self.extract_smoothed_pitch(self.user_audio_path)
@@ -1031,12 +1035,11 @@ class PitchAccentApp:
     def finish_recording(self):
         """Handle recording cleanup in the main thread"""
         try:
-            if hasattr(self, 'countdown_label'):
-                self.countdown_label.destroy()
-                delattr(self, 'countdown_label')
+            self.record_button.config(text="Record", state=tk.NORMAL)
             
-            self.record_button.config(state=tk.NORMAL)
-            self.record_button.pack(pady=2)
+            # Remove the overlay frame
+            if hasattr(self, 'overlay_frame'):
+                self.overlay_frame.place_forget()
             
             # Clear the recording indicator by updating the plot
             if os.path.exists(self.user_audio_path):
