@@ -17,13 +17,61 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QComboBox, QCheckBox, QLineEdit,
     QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QEvent
-from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl
+from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.widgets import SpanSelector
 import json
+from PIL import Image
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PyQt6.QtMultimediaWidgets import QVideoWidget
+
+class VideoWidget(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background-color: black;")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._frame = None
+        self._aspect_ratio = None
+
+    def set_frame(self, frame):
+        self._frame = frame
+        if frame is not None:
+            h, w = frame.shape[:2]
+            self._aspect_ratio = w / h
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._frame is not None:
+            h, w = self._frame.shape[:2]
+            label_w = self.width()
+            label_h = self.height()
+            # Calculate target size
+            frame_ratio = w / h
+            label_ratio = label_w / label_h
+            if frame_ratio > label_ratio:
+                # Fit to width
+                new_w = label_w
+                new_h = int(label_w / frame_ratio)
+            else:
+                # Fit to height
+                new_h = label_h
+                new_w = int(label_h * frame_ratio)
+            # Use PIL for resizing for best quality
+            pil_img = Image.fromarray(self._frame)
+            pil_img = pil_img.resize((new_w, new_h), Image.LANCZOS)
+            rgb_img = pil_img.convert('RGB')
+            img_data = rgb_img.tobytes('raw', 'RGB')
+            image = QImage(img_data, new_w, new_h, 3 * new_w, QImage.Format.Format_RGB888)
+            # Center the image
+            x = (label_w - new_w) // 2
+            y = (label_h - new_h) // 2
+            painter = QPainter(self)
+            painter.drawImage(x, y, image)
+            painter.end()
 
 class PitchAccentApp(QMainWindow):
     def __init__(self):
@@ -101,12 +149,44 @@ class PitchAccentApp(QMainWindow):
         video_controls = QWidget()
         video_controls_layout = QHBoxLayout(video_controls)
         
+        # Create video display container
+        video_container = QWidget()
+        video_container_layout = QVBoxLayout(video_container)
+        
         # Create video display
-        self.video_label = QLabel()
-        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setMinimumSize(400, 300)
-        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.video_label.setStyleSheet("background-color: black;")
+        self.video_widget = QVideoWidget()
+        self.video_widget.setMinimumSize(400, 300)
+        self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.media_player = QMediaPlayer()
+        self.media_player.setVideoOutput(self.video_widget)
+        self.audio_output = QAudioOutput()
+        self.media_player.setAudioOutput(self.audio_output)
+        
+        # Add video controls
+        video_buttons = QHBoxLayout()
+        self.show_video_btn = QPushButton("Hide Video")
+        self.show_video_btn.setCheckable(True)
+        self.show_video_btn.setChecked(True)
+        self.show_video_btn.clicked.connect(self.toggle_video_visibility)
+        
+        self.rotate_left_btn = QPushButton("↺")
+        self.rotate_left_btn.clicked.connect(lambda: self.rotate_video(-90))
+        self.rotate_right_btn = QPushButton("↻")
+        self.rotate_right_btn.clicked.connect(lambda: self.rotate_video(90))
+        
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.clicked.connect(self.toggle_pause)
+        self.is_paused = False
+        
+        video_buttons.addWidget(self.show_video_btn)
+        video_buttons.addWidget(self.rotate_left_btn)
+        video_buttons.addWidget(self.rotate_right_btn)
+        video_buttons.addWidget(self.pause_btn)
+        video_buttons.addStretch()
+        
+        video_container_layout.addWidget(self.video_widget)
+        video_container_layout.addLayout(video_buttons)
         
         # Create controls section
         controls = QWidget()
@@ -180,7 +260,7 @@ class PitchAccentApp(QMainWindow):
         controls_layout.addWidget(self.select_file_btn)
         
         # Add video and controls to layout
-        video_controls_layout.addWidget(self.video_label, stretch=2)
+        video_controls_layout.addWidget(video_container, stretch=2)
         video_controls_layout.addWidget(controls, stretch=1)
         
         # Add video controls section to main layout
@@ -396,9 +476,14 @@ class PitchAccentApp(QMainWindow):
         if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
             video = VideoFileClip(file_path)
             video.audio.write_audiofile(audio_path)
+            # Set video file for QMediaPlayer
+            self.media_player.setSource(QUrl.fromLocalFile(file_path))
+            self.video_widget.show()
         elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
             audio = AudioFileClip(file_path)
             audio.write_audiofile(audio_path)
+            self.media_player.setSource(QUrl())
+            self.video_widget.hide()
         else:
             raise ValueError("Unsupported file type.")
         
@@ -414,10 +499,6 @@ class PitchAccentApp(QMainWindow):
         self.loop_native_btn.setEnabled(True)
         self.stop_native_btn.setEnabled(True)
         self.record_btn.setEnabled(True)
-        
-        # Start video display (only for video files)
-        if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-            self.start_video_display()
 
     def process_audio(self):
         """Process the audio file to extract waveform and pitch"""
@@ -433,78 +514,28 @@ class PitchAccentApp(QMainWindow):
         self.native_voiced = voiced
         self.redraw_waveform()
 
-    def start_video_display(self):
-        """Start video display in a separate window"""
-        if hasattr(self, 'video_window'):
-            self.video_window.close()
-        
-        self.video_window = QWidget()
-        self.video_window.setWindowTitle("Video Display")
-        self.video_window.setWindowFlags(Qt.WindowType.Window)
-        
-        layout = QVBoxLayout(self.video_window)
-        self.video_display = QLabel()
-        self.video_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.video_display)
-        
-        # Set video window size
-        screen = QApplication.primaryScreen().geometry()
-        width = int(screen.width() * 0.3)  # 30% of screen width
-        height = int(width * 0.75)  # 4:3 aspect ratio
-        self.video_window.resize(width, height)
-        
-        # Start video capture
-        self.cap = cv2.VideoCapture(self.video_path)
-        self.video_timer = QTimer()
-        self.video_timer.timeout.connect(self.update_video_frame)
-        self.video_timer.start(33)  # ~30 FPS
-        
-        self.video_window.show()
-
-    def update_video_frame(self):
-        """Update the video frame"""
-        if not self.cap.isOpened():
-            return
-            
-        ret, frame = self.cap.read()
-        if not ret:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret, frame = self.cap.read()
-            if not ret:
-                return
-        
-        # Convert frame to RGB
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Resize frame to fit display
-        display_size = self.video_display.size()
-        frame = cv2.resize(frame, (display_size.width(), display_size.height()))
-        
-        # Convert to QImage and display
-        image = QImage(frame.data, frame.shape[1], frame.shape[0], frame.strides[0], QImage.Format.Format_RGB888)
-        self.video_display.setPixmap(QPixmap.fromImage(image))
-
     def play_native(self):
         """Play native audio"""
         if self.playing:
             return
-            
         self.playing = True
+        self.is_paused = False
         self.play_native_btn.setEnabled(False)
         self.loop_native_btn.setEnabled(False)
-        
+        self.pause_btn.setEnabled(True)
+        self.pause_btn.setText("Pause")
         self.start_native_playback_with_timer()
 
     def start_native_playback_with_timer(self):
         import time
         from PyQt6.QtCore import QTimer
-        # Prevent overlapping playbacks/timers
         self._cleanup_playback_lines()
         if hasattr(self, 'native_playback_line') and self.native_playback_line:
             self.native_playback_line.remove()
         self.native_playback_line = self.ax_native.axvline(0, color='red', linestyle='--', linewidth=2)
         self.canvas.draw_idle()
         self.native_playback_start_time = time.time()
+        self._paused_elapsed = 0
         # Determine playback range
         try:
             import numpy as np
@@ -524,7 +555,10 @@ class PitchAccentApp(QMainWindow):
             offset = 0
         self.native_playback_timer = QTimer()
         self.native_playback_timer.setInterval(20)
-        def update_playback_line():
+        def update_playback_line_and_video():
+            if self.is_paused:
+                self._paused_elapsed = time.time() - self.native_playback_start_time
+                return
             elapsed = time.time() - self.native_playback_start_time
             pos = offset + elapsed
             try:
@@ -533,6 +567,28 @@ class PitchAccentApp(QMainWindow):
                     self.canvas.draw_idle()
             except Exception:
                 pass
+            # --- Video sync logic ---
+            if hasattr(self, 'cap') and hasattr(self, 'video_path') and self.cap.isOpened():
+                import cv2
+                video_fps = self.cap.get(cv2.CAP_PROP_FPS)
+                frame_count = self.cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                video_duration = frame_count / video_fps if video_fps > 0 else 0
+                if video_duration > 0:
+                    video_time = min(elapsed, video_duration)
+                    frame_idx = int(video_time * video_fps)
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    ret, frame = self.cap.read()
+                    if ret:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        if self.current_rotation != 0:
+                            if self.current_rotation == 90:
+                                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                            elif self.current_rotation == 180:
+                                frame = cv2.rotate(frame, cv2.ROTATE_180)
+                            elif self.current_rotation == 270:
+                                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                        self.video_widget.setPixmap(QPixmap.fromImage(QImage(frame.tobytes(), frame.shape[1], frame.shape[0], QImage.Format.Format_RGB888)))
+            # --- End video sync logic ---
             if elapsed >= duration or not self.playing:
                 try:
                     self.native_playback_timer.stop()
@@ -548,14 +604,16 @@ class PitchAccentApp(QMainWindow):
                     self.canvas.draw_idle()
                 except Exception:
                     pass
-        self.native_playback_timer.timeout.connect(update_playback_line)
+                self.pause_btn.setEnabled(False)
+        self.native_playback_timer.timeout.connect(update_playback_line_and_video)
         self.native_playback_timer.start()
-        # Start playback in a background thread
         import threading
         threading.Thread(target=self._play_native_thread, daemon=True).start()
 
     def _play_native_thread(self):
         try:
+            import numpy as np
+            import scipy.io.wavfile as wavfile
             sample_rate, audio_data = wavfile.read(self.native_audio_path)
             if self._loop_end is not None and self._loop_end > self._loop_start:
                 start_sample = int(self._loop_start * sample_rate)
@@ -964,6 +1022,70 @@ class PitchAccentApp(QMainWindow):
                 self.user_playback_line = None
         except Exception:
             pass
+
+    def toggle_pause(self):
+        """Pause or resume audio and video playback"""
+        if not self.playing:
+            return
+        self.is_paused = not self.is_paused
+        if self.is_paused:
+            sd.stop()
+            self.pause_btn.setText("Resume")
+        else:
+            self.native_playback_start_time = time.time() - self._paused_elapsed
+            self.pause_btn.setText("Pause")
+            # Resume audio playback from where it was paused
+            import threading
+            threading.Thread(target=self._play_native_thread_resume, daemon=True).start()
+
+    def _play_native_thread_resume(self):
+        try:
+            import numpy as np
+            import scipy.io.wavfile as wavfile
+            sample_rate, audio_data = wavfile.read(self.native_audio_path)
+            if self._loop_end is not None and self._loop_end > self._loop_start:
+                start_sample = int(self._loop_start * sample_rate)
+                end_sample = int(self._loop_end * sample_rate)
+                audio_data = audio_data[start_sample:end_sample]
+            duration = len(audio_data) / sample_rate
+            # Resume from paused position
+            start_sample = int(self._paused_elapsed * sample_rate)
+            audio_data = audio_data[start_sample:]
+            sd.play(audio_data, sample_rate)
+            sd.wait()
+            self.playing = False
+        except Exception as e:
+            print(f"Error during resume playback: {e}")
+
+    def toggle_video_visibility(self):
+        """Toggle video visibility"""
+        is_visible = self.show_video_btn.isChecked()
+        self.video_widget.setVisible(is_visible)
+        self.rotate_left_btn.setVisible(is_visible)
+        self.rotate_right_btn.setVisible(is_visible)
+        self.show_video_btn.setText("Hide Video" if is_visible else "Show Video")
+
+    def rotate_video(self, angle):
+        """Rotate video display"""
+        if not hasattr(self, 'original_frame'):
+            return
+            
+        self.current_rotation = (self.current_rotation + angle) % 360
+        self.resize_video_display()
+
+    def resize_video_display(self):
+        """Display the last frame at native resolution, let Qt scale"""
+        if not hasattr(self, 'original_frame'):
+            return
+        frame = self.original_frame.copy()
+        if self.current_rotation != 0:
+            if self.current_rotation == 90:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            elif self.current_rotation == 180:
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
+            elif self.current_rotation == 270:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        self.video_widget.setPixmap(QPixmap.fromImage(QImage(frame.tobytes(), frame.shape[1], frame.shape[0], QImage.Format.Format_RGB888)))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
