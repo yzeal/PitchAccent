@@ -9,7 +9,7 @@ import time
 import threading
 import signal
 import cv2
-from moviepy.editor import AudioFileClip
+from moviepy.editor import AudioFileClip, VideoFileClip
 from scipy.interpolate import interp1d
 from scipy.signal import medfilt, savgol_filter
 from PyQt6.QtWidgets import (
@@ -34,7 +34,6 @@ class PitchAccentApp(QMainWindow):
         self.user_audio_path = os.path.join(tempfile.gettempdir(), "user_recording.wav")
         self.playing = False
         self.recording = False
-        self.pending_recording = False
         self.last_native_loop_time = None
         self.overlay_patch = None
         self.record_overlay = None
@@ -138,7 +137,7 @@ class PitchAccentApp(QMainWindow):
         user_label = QLabel("User Audio")
         user_label.setStyleSheet("font-weight: bold;")
         self.record_btn = QPushButton("Record")
-        self.record_btn.setEnabled(False)
+        self.record_btn.setEnabled(True)
         self.play_user_btn = QPushButton("Play User")
         self.play_user_btn.setEnabled(False)
         self.loop_user_btn = QPushButton("Loop User")
@@ -178,25 +177,24 @@ class PitchAccentApp(QMainWindow):
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         # Create subplots
-        self.ax1 = self.figure.add_subplot(211)  # Waveform
-        self.ax2 = self.figure.add_subplot(212)  # Pitch contour
+        self.ax_native = self.figure.add_subplot(211)  # Native pitch
+        self.ax_user = self.figure.add_subplot(212)    # User pitch
         
         # Configure subplots
-        self.ax1.set_ylabel('Amplitude')
-        self.ax1.set_title('Waveform')
-        self.ax2.set_xlabel('Time (s)')
-        self.ax2.set_ylabel('Pitch (Hz)')
-        self.ax2.set_title('Pitch Contour')
+        self.ax_native.set_ylabel('Hz')
+        self.ax_native.set_title('Native Speaker (Smoothed Pitch)')
+        self.ax_user.set_xlabel('Time (s)')
+        self.ax_user.set_ylabel('Hz')
+        self.ax_user.set_title('Your Recording (Smoothed Pitch)')
         
-        # Add span selector for loop selection
+        # Add span selector for loop selection (on native pitch)
         self.span = SpanSelector(
-            self.ax1,
+            self.ax_native,
             self.on_select,
             'horizontal',
             useblit=True,
-            props=dict(alpha=0.5, facecolor='tab:blue'),
-            interactive=True,
-            drag_from_anywhere=True
+            props=dict(alpha=0.3, facecolor='blue'),
+            interactive=True
         )
         
         # Add waveform section to main layout
@@ -244,7 +242,6 @@ class PitchAccentApp(QMainWindow):
             
             # Stop any ongoing recording
             self.recording = False
-            self.pending_recording = False
             
             # Clear video window if exists
             if hasattr(self, 'video_window'):
@@ -274,27 +271,28 @@ class PitchAccentApp(QMainWindow):
             self.loop_info_label.setText(f"Loop: {self._loop_start:.2f}s - {self._loop_end:.2f}s")
 
     def redraw_waveform(self):
-        """Redraw the waveform with current loop selection"""
-        if not hasattr(self, 'times') or not hasattr(self, 'waveform'):
-            return
-            
-        self.ax1.clear()
-        self.ax1.plot(self.times, self.waveform, 'b-', alpha=0.5)
-        self.ax1.set_ylabel('Amplitude')
-        self.ax1.set_title('Waveform')
-        
-        if self._loop_end is not None:
-            self.ax1.axvspan(self._loop_start, self._loop_end, color='blue', alpha=0.2)
-        
-        self.ax2.clear()
-        self.ax2.plot(self.times, self.pitch_contour, 'r-', alpha=0.5)
-        self.ax2.set_xlabel('Time (s)')
-        self.ax2.set_ylabel('Pitch (Hz)')
-        self.ax2.set_title('Pitch Contour')
-        
-        if self._loop_end is not None:
-            self.ax2.axvspan(self._loop_start, self._loop_end, color='blue', alpha=0.2)
-        
+        """Redraw the native and user pitch curves with current loop selection"""
+        # Native pitch
+        self.ax_native.clear()
+        if hasattr(self, 'native_times') and hasattr(self, 'native_pitch'):
+            self.ax_native.plot(self.native_times, self.native_pitch, color='blue', label='Native')
+            if self._loop_end is not None:
+                self.ax_native.axvspan(self._loop_start, self._loop_end, color='blue', alpha=0.2)
+            self.ax_native.set_ylabel('Hz')
+            self.ax_native.set_title('Native Speaker (Smoothed Pitch)')
+            self.ax_native.set_ylim(0, 500)
+            self.ax_native.legend()
+            self.ax_native.grid(True)
+        # User pitch
+        self.ax_user.clear()
+        if hasattr(self, 'user_times') and hasattr(self, 'user_pitch'):
+            self.ax_user.plot(self.user_times, self.user_pitch, color='orange', label='User')
+            self.ax_user.set_ylim(0, 500)
+            self.ax_user.legend()
+        self.ax_user.set_xlabel('Time (s)')
+        self.ax_user.set_ylabel('Hz')
+        self.ax_user.set_title('Your Recording (Smoothed Pitch)')
+        self.ax_user.grid(True)
         self.figure.tight_layout()
         self.canvas.draw()
 
@@ -315,10 +313,16 @@ class PitchAccentApp(QMainWindow):
 
     def load_file(self, file_path):
         """Load and process the selected file"""
-        # Extract audio from video
-        video = AudioFileClip(file_path)
+        ext = os.path.splitext(file_path)[1].lower()
         audio_path = os.path.join(tempfile.gettempdir(), "temp_audio.wav")
-        video.audio.write_audiofile(audio_path)
+        if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
+            video = VideoFileClip(file_path)
+            video.audio.write_audiofile(audio_path)
+        elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
+            audio = AudioFileClip(file_path)
+            audio.write_audiofile(audio_path)
+        else:
+            raise ValueError("Unsupported file type.")
         
         # Store paths
         self.native_audio_path = audio_path
@@ -333,31 +337,26 @@ class PitchAccentApp(QMainWindow):
         self.stop_native_btn.setEnabled(True)
         self.record_btn.setEnabled(True)
         
-        # Start video display
-        self.start_video_display()
+        # Start video display (only for video files)
+        if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
+            self.start_video_display()
 
     def process_audio(self):
         """Process the audio file to extract waveform and pitch"""
         # Load audio using parselmouth
         sound = parselmouth.Sound(self.native_audio_path)
-        
-        # Get waveform data
-        self.times = np.arange(len(sound.values[0])) / sound.sampling_frequency
-        self.waveform = sound.values[0]
-        
         # Extract pitch
         pitch = sound.to_pitch()
         pitch_values = pitch.selected_array['frequency']
-        
-        # Interpolate pitch values to match waveform length
         pitch_times = np.arange(len(pitch_values)) * pitch.time_step
+        # Interpolate and smooth
         f = interp1d(pitch_times, pitch_values, bounds_error=False, fill_value=0)
-        self.pitch_contour = f(self.times)
-        
-        # Apply smoothing
-        self.pitch_contour = savgol_filter(self.pitch_contour, 51, 3)
-        
-        # Redraw waveform
+        native_times = np.arange(len(sound.values[0])) / sound.sampling_frequency
+        native_pitch = f(native_times)
+        native_pitch = savgol_filter(native_pitch, 51, 3)
+        self.native_times = native_times
+        self.native_pitch = native_pitch
+        # Redraw
         self.redraw_waveform()
 
     def start_video_display(self):
@@ -496,6 +495,7 @@ class PitchAccentApp(QMainWindow):
 
     def start_recording(self):
         """Start recording user audio"""
+        print("[DEBUG] start_recording called")
         if self.recording:
             return
             
@@ -505,46 +505,79 @@ class PitchAccentApp(QMainWindow):
         self.loop_user_btn.setEnabled(False)
         
         # Start recording in a separate thread
-        threading.Thread(target=self._record_thread, daemon=True).start()
+        try:
+            print("[DEBUG] Starting _record_thread...")
+            threading.Thread(target=self._record_thread, daemon=True).start()
+        except Exception as e:
+            print(f"[DEBUG] Failed to start _record_thread: {e}")
 
     def _record_thread(self):
         """Thread function for recording"""
+        print("[DEBUG] _record_thread started")
         try:
-            # Get selected input device
-            device_id = self.input_selector.currentIndex()
-            
-            # Start recording
-            recording = sd.rec(
-                int(self.max_recording_time * 44100),
-                samplerate=44100,
-                channels=1,
-                device=device_id
-            )
-            
-            # Wait for recording to complete or stop
-            while self.recording and not self.pending_recording:
-                time.sleep(0.1)
-            
-            # Stop recording
-            sd.stop()
-            
-            # Save recording if not pending
-            if not self.pending_recording:
-                wavfile.write(self.user_audio_path, 44100, recording)
+            try:
+                # Get selected input device
+                device_id = self.input_selector.currentIndex()
+                print(f"[DEBUG] Using input device index: {device_id}")
+                # Start recording
+                recording = sd.rec(
+                    int(self.max_recording_time * 44100),
+                    samplerate=44100,
+                    channels=1,
+                    device=device_id
+                )
+                print("[DEBUG] sd.rec called, entering while loop...")
+                # Wait for recording to complete or stop
+                while self.recording:
+                    print("[DEBUG] ...recording in progress...")
+                    time.sleep(0.1)
+                print("[DEBUG] Exited while loop, calling sd.stop()")
+                # Stop recording
+                sd.stop()
+                sd.wait()
+                print("[DEBUG] sd.wait() completed, about to access recording array...")
+                print("[DEBUG] sd.stop() called, about to write file...")
+                try:
+                    print(f"[DEBUG] type(recording): {type(recording)}")
+                    print(f"[DEBUG] repr(recording): {repr(recording)[:200]}")
+                    print(f"[DEBUG] recording.shape: {recording.shape}, dtype: {recording.dtype}")
+                except Exception as e:
+                    print(f"[DEBUG] Exception when accessing recording array: {e}")
+                # Always process and save after recording stops
+                print(f"[DEBUG] recording.shape: {recording.shape}, dtype: {recording.dtype}")
+                print(f"[DEBUG] recording min: {np.min(recording)}, max: {np.max(recording)}")
+                try:
+                    # Convert float32 [-1, 1] to int16 for wavfile.write
+                    recording_int16 = np.int16(np.clip(recording, -1, 1) * 32767)
+                    print(f"[DEBUG] recording_int16.shape: {recording_int16.shape}, dtype: {recording_int16.dtype}")
+                    wavfile.write(self.user_audio_path, 44100, recording_int16)
+                    print(f"[DEBUG] Saved user recording to: {self.user_audio_path}")
+                    if os.path.exists(self.user_audio_path):
+                        print(f"[DEBUG] User recording file size: {os.path.getsize(self.user_audio_path)} bytes")
+                    else:
+                        print("[DEBUG] User recording file not found!")
+                except Exception as e:
+                    print(f"[DEBUG] Exception during wavfile.write: {e}")
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.critical(self, "Error", f"Exception during saving recording: {e}")
+                self.process_user_audio()
                 self.play_user_btn.setEnabled(True)
                 self.loop_user_btn.setEnabled(True)
-            
-        except Exception as e:
-            print(f"Error during recording: {e}")
+            except Exception as thread_inner_e:
+                print(f"[DEBUG] Exception in _record_thread inner block: {thread_inner_e}")
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self, "Error", f"Exception in recording thread: {thread_inner_e}")
+        except Exception as thread_outer_e:
+            print(f"[DEBUG] Exception in _record_thread outer block: {thread_outer_e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Error", f"Exception in recording thread (outer): {thread_outer_e}")
         finally:
             self.recording = False
             self.record_btn.setText("Record")
-            self.pending_recording = False
 
     def stop_recording(self):
         """Stop recording user audio"""
         self.recording = False
-        self.pending_recording = True
 
     def play_user(self):
         """Play user recording"""
@@ -609,6 +642,33 @@ class PitchAccentApp(QMainWindow):
         """Stop user audio playback"""
         self.user_playing = False
         sd.stop()
+
+    def process_user_audio(self):
+        """Process the user recording to extract and plot pitch curve"""
+        try:
+            print(f"[DEBUG] Processing user audio: {self.user_audio_path}")
+            if not os.path.exists(self.user_audio_path):
+                print("[DEBUG] User audio file does not exist!")
+                return
+            sound = parselmouth.Sound(self.user_audio_path)
+            pitch = sound.to_pitch()
+            pitch_values = pitch.selected_array['frequency']
+            if len(pitch_values) == 0 or np.all(pitch_values == 0):
+                print("[DEBUG] No pitch detected in user recording.")
+                QMessageBox.warning(self, "No Pitch Detected", "No pitch could be detected in your recording. Please try again.")
+                return
+            pitch_times = np.arange(len(pitch_values)) * pitch.time_step
+            f = interp1d(pitch_times, pitch_values, bounds_error=False, fill_value=0)
+            user_times = np.arange(len(sound.values[0])) / sound.sampling_frequency
+            user_pitch = f(user_times)
+            user_pitch = savgol_filter(user_pitch, 51, 3)
+            self.user_times = user_times
+            self.user_pitch = user_pitch
+            print(f"[DEBUG] User pitch extracted and plotted.")
+            self.redraw_waveform()
+        except Exception as e:
+            print(f"Error processing user audio: {e}")
+            QMessageBox.critical(self, "Error", f"Error processing user audio: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
