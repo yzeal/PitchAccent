@@ -619,7 +619,7 @@ class PitchAccentApp:
             
         # Plot each voiced segment separately with increased thickness
         for start, end in voiced_ranges:
-            self.ax_native.plot(x[start:end], y[start:end], color='blue', linewidth=9, solid_capstyle='round')
+            self.ax_native.plot(x[start:end], y[start:end], color='blue', linewidth=5, solid_capstyle='round')
         
         self.overlay_patch = self.ax_native.axvspan(0, 0, color='gray', alpha=0.2)
         self.ax_native.set_title("Native Speaker (Smoothed Pitch)")
@@ -859,7 +859,7 @@ class PitchAccentApp:
                         
                     # Plot each voiced segment separately with increased thickness
                     for start, end in voiced_ranges:
-                        self.ax_user.plot(x[start:end], y[start:end], color='orange', linewidth=9, solid_capstyle='round')
+                        self.ax_user.plot(x[start:end], y[start:end], color='orange', linewidth=5, solid_capstyle='round')
                     
                     self.canvas.draw_idle()
                     
@@ -936,7 +936,7 @@ class PitchAccentApp:
             
         # Plot each voiced segment separately with increased thickness
         for start, end in voiced_ranges:
-            self.ax_user.plot(x[start:end], y[start:end], color='orange', linewidth=9, solid_capstyle='round')
+            self.ax_user.plot(x[start:end], y[start:end], color='orange', linewidth=5, solid_capstyle='round')
         
         self.ax_user.set_title("Your Recording (Smoothed Pitch)")
         self.ax_user.set_ylabel("Hz")
