@@ -359,7 +359,12 @@ class PitchAccentApp(QMainWindow):
                             self.ax_user.plot(
                                 seg_x, seg_y, color='orange', linewidth=6, solid_capstyle='round', label='User' if start == 0 else "")
                     start = None
-            self.ax_user.set_ylim(0, 500)
+            # Set y-limits: if user pitch goes above 500 Hz, set ylim to max(500, max_user_pitch + 20)
+            if hasattr(self, 'user_pitch') and np.any(self.user_voiced):
+                max_user_pitch = np.max(self.user_pitch[self.user_voiced])
+                self.ax_user.set_ylim(0, max(500, max_user_pitch + 20))
+            else:
+                self.ax_user.set_ylim(0, 500)
             self.ax_user.legend()
         self.ax_user.set_xlabel('Time (s)')
         self.ax_user.set_ylabel('Hz')
