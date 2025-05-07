@@ -521,26 +521,41 @@ class PitchAccentApp(QMainWindow):
             self.vlc_player.pause()
             self.play_pause_btn.setText("Play")
         else:
-            # If at end or stopped, start from beginning
+            # Always ensure we're at the start if stopped or ended
             if state in [vlc.State.Ended, vlc.State.Stopped]:
+                self.vlc_player.stop()
                 self.vlc_player.set_time(0)
-            self.vlc_player.play()
-            self.play_pause_btn.setText("Pause")
-            self.stop_btn.setEnabled(True)
+                # Small delay to ensure VLC is ready
+                QTimer.singleShot(50, lambda: (
+                    self.vlc_player.play(),
+                    self.play_pause_btn.setText("Pause"),
+                    self.stop_btn.setEnabled(True),
+                    self.vlc_poll_timer.start()
+                ))
+            else:
+                self.vlc_player.play()
+                self.play_pause_btn.setText("Pause")
+                self.stop_btn.setEnabled(True)
+                self.vlc_poll_timer.start()
             
-        self.vlc_poll_timer.start()
         QTimer.singleShot(200, self._reset_play_pause_debounce)
 
     def _reset_play_pause_debounce(self):
         self._play_pause_debounce = False
 
     def poll_vlc_state_and_overlay(self):
+        """Update UI based on VLC state"""
         state = self.vlc_player.get_state()
+        
         # Update Play/Pause button label
         if state in [vlc.State.Playing, vlc.State.Buffering]:
             self.play_pause_btn.setText("Pause")
-        else:
+        elif state in [vlc.State.Ended, vlc.State.Stopped]:
             self.play_pause_btn.setText("Play")
+            self.stop_btn.setEnabled(False)
+            if state == vlc.State.Ended:
+                self.vlc_player.set_time(0)
+        
         # Update overlay
         ms = self.vlc_player.get_time()
         if ms is not None and ms >= 0:
@@ -550,12 +565,11 @@ class PitchAccentApp(QMainWindow):
             else:
                 self.native_playback_line.set_xdata([t, t])
             self.canvas.draw_idle()
+        
         # If stopped, clean up overlay and timer
         if state == vlc.State.Stopped:
             self.vlc_poll_timer.stop()
-            self.play_pause_btn.setText("Play")
-            self.stop_btn.setEnabled(False)
-            self.show_first_frame_after_stop()
+            self.update_native_playback_overlay(reset=True)
 
     def stop_native(self):
         """Stop playback and reset to first frame"""
@@ -569,8 +583,11 @@ class PitchAccentApp(QMainWindow):
 
     def show_first_frame_after_stop(self):
         """Show first frame after stopping"""
+        # Ensure we're at the start
+        self.vlc_player.set_time(0)
+        # Brief play/pause to show first frame
         self.vlc_player.play()
-        QTimer.singleShot(100, lambda: (
+        QTimer.singleShot(50, lambda: (
             self.vlc_player.pause(),
             self.vlc_player.set_time(0)
         ))
@@ -578,21 +595,22 @@ class PitchAccentApp(QMainWindow):
     def on_vlc_end_reached(self, event):
         """Handle end of media"""
         def handle_end():
+            # Always stop and reset position
             self.vlc_player.stop()
+            self.vlc_player.set_time(0)
             self.vlc_poll_timer.stop()
             self.update_native_playback_overlay(reset=True)
             
             if self.loop_checkbox.isChecked():
                 # If looping, restart after a short delay
                 QTimer.singleShot(100, lambda: (
-                    self.vlc_player.set_time(0),
                     self.vlc_player.play(),
                     self.vlc_poll_timer.start(),
                     self.play_pause_btn.setText("Pause"),
                     self.stop_btn.setEnabled(True)
                 ))
             else:
-                # If not looping, just show first frame
+                # If not looping, just show first frame and enable play
                 self.play_pause_btn.setText("Play")
                 self.stop_btn.setEnabled(False)
                 self.show_first_frame_after_stop()
