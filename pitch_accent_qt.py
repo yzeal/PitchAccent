@@ -27,6 +27,7 @@ import json
 from PIL import Image
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
+import vlc
 
 class VideoWidget(QLabel):
     def __init__(self, parent=None):
@@ -93,6 +94,8 @@ class PitchAccentApp(QMainWindow):
         self.show_video = True
         self.max_recording_time = 10  # seconds
         self.smoothing = 0
+        self.current_rotation = 0  # Initialize rotation to 0 degrees
+        self.original_frame = None  # Initialize original_frame to None
         
         # Get audio devices
         self.input_devices = [d for d in sd.query_devices() if d['max_input_channels'] > 0]
@@ -154,21 +157,16 @@ class PitchAccentApp(QMainWindow):
         video_container_layout = QVBoxLayout(video_container)
         
         # Create video display
-        self.video_widget = QVideoWidget()
+        self.vlc_instance = vlc.Instance()
+        self.vlc_player = self.vlc_instance.media_player_new()
+        self.video_widget = QLabel()  # Changed from QWidget to QLabel
         self.video_widget.setMinimumSize(400, 300)
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.media_player = QMediaPlayer()
-        self.media_player.setVideoOutput(self.video_widget)
-        self.audio_output = QAudioOutput()
-        self.media_player.setAudioOutput(self.audio_output)
+        self.video_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Center the image
+        self.vlc_player.set_hwnd(int(self.video_widget.winId()))  # Windows only
         
         # Add video controls
         video_buttons = QHBoxLayout()
-        self.show_video_btn = QPushButton("Hide Video")
-        self.show_video_btn.setCheckable(True)
-        self.show_video_btn.setChecked(True)
-        self.show_video_btn.clicked.connect(self.toggle_video_visibility)
-        
         self.rotate_left_btn = QPushButton("↺")
         self.rotate_left_btn.clicked.connect(lambda: self.rotate_video(-90))
         self.rotate_right_btn = QPushButton("↻")
@@ -179,7 +177,6 @@ class PitchAccentApp(QMainWindow):
         self.pause_btn.clicked.connect(self.toggle_pause)
         self.is_paused = False
         
-        video_buttons.addWidget(self.show_video_btn)
         video_buttons.addWidget(self.rotate_left_btn)
         video_buttons.addWidget(self.rotate_right_btn)
         video_buttons.addWidget(self.pause_btn)
@@ -476,13 +473,22 @@ class PitchAccentApp(QMainWindow):
         if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
             video = VideoFileClip(file_path)
             video.audio.write_audiofile(audio_path)
-            # Set video file for QMediaPlayer
-            self.media_player.setSource(QUrl.fromLocalFile(file_path))
-            self.video_widget.show()
+            # Set video file for VLC
+            media = self.vlc_instance.media_new(file_path)
+            self.vlc_player.set_media(media)
+            self.video_widget.show()  # Always show video widget
+            # Store the first frame for rotation
+            cap = cv2.VideoCapture(file_path)
+            ret, frame = cap.read()
+            if ret:
+                self.original_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self.current_rotation = 0
+                self.resize_video_display()  # Show first frame immediately
+            cap.release()
         elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
             audio = AudioFileClip(file_path)
             audio.write_audiofile(audio_path)
-            self.media_player.setSource(QUrl())
+            self.vlc_player.set_media(None)
             self.video_widget.hide()
         else:
             raise ValueError("Unsupported file type.")
@@ -515,16 +521,31 @@ class PitchAccentApp(QMainWindow):
         self.redraw_waveform()
 
     def play_native(self):
-        """Play native audio"""
-        if self.playing:
-            return
-        self.playing = True
-        self.is_paused = False
-        self.play_native_btn.setEnabled(False)
-        self.loop_native_btn.setEnabled(False)
-        self.pause_btn.setEnabled(True)
-        self.pause_btn.setText("Pause")
-        self.start_native_playback_with_timer()
+        """Play native audio and video (VLC)"""
+        try:
+            if self.playing:
+                return
+            self.playing = True
+            self.is_paused = False
+            self.play_native_btn.setEnabled(False)
+            self.loop_native_btn.setEnabled(False)
+            self.pause_btn.setEnabled(True)
+            self.pause_btn.setText("Pause")
+            # Start VLC video playback
+            if self.video_path and hasattr(self, 'original_frame'):
+                print("Starting VLC playback...")
+                self.vlc_player.audio_set_mute(True)  # Mute VLC audio to prevent double audio
+                self.vlc_player.play()
+                # Display the first frame immediately
+                self.resize_video_display()
+            self.start_native_playback_with_timer()
+        except Exception as e:
+            print(f"Error in play_native: {e}")
+            import traceback
+            traceback.print_exc()
+            self.playing = False
+            self.play_native_btn.setEnabled(True)
+            self.loop_native_btn.setEnabled(True)
 
     def start_native_playback_with_timer(self):
         import time
@@ -612,6 +633,7 @@ class PitchAccentApp(QMainWindow):
 
     def _play_native_thread(self):
         try:
+            print("Starting native audio playback thread...")
             import numpy as np
             import scipy.io.wavfile as wavfile
             sample_rate, audio_data = wavfile.read(self.native_audio_path)
@@ -620,11 +642,18 @@ class PitchAccentApp(QMainWindow):
                 end_sample = int(self._loop_end * sample_rate)
                 audio_data = audio_data[start_sample:end_sample]
             duration = len(audio_data) / sample_rate
+            # Stop any existing playback before starting new one
+            sd.stop()
+            sd.wait()  # Wait for stop to complete
+            print("Playing audio...")
             sd.play(audio_data, sample_rate)
             sd.wait()
+            print("Audio playback completed")
             self.playing = False
         except Exception as e:
             print(f"Error during playback: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.playing = False
             self.play_native_btn.setEnabled(True)
@@ -667,10 +696,14 @@ class PitchAccentApp(QMainWindow):
             self.loop_native_btn.setEnabled(True)
 
     def stop_native(self):
-        """Stop native audio playback"""
+        """Stop native audio and video playback"""
         self.playing = False
         sd.stop()
         self._cleanup_playback_lines()
+        # Stop VLC video playback but keep the frame visible
+        self.vlc_player.stop()
+        if hasattr(self, 'original_frame'):
+            self.resize_video_display()
 
     def toggle_recording(self):
         """Toggle recording state"""
@@ -1031,9 +1064,11 @@ class PitchAccentApp(QMainWindow):
         if self.is_paused:
             sd.stop()
             self.pause_btn.setText("Resume")
+            self.vlc_player.pause()
         else:
             self.native_playback_start_time = time.time() - self._paused_elapsed
             self.pause_btn.setText("Pause")
+            self.vlc_player.set_pause(0)
             # Resume audio playback from where it was paused
             import threading
             threading.Thread(target=self._play_native_thread_resume, daemon=True).start()
@@ -1057,14 +1092,6 @@ class PitchAccentApp(QMainWindow):
         except Exception as e:
             print(f"Error during resume playback: {e}")
 
-    def toggle_video_visibility(self):
-        """Toggle video visibility"""
-        is_visible = self.show_video_btn.isChecked()
-        self.video_widget.setVisible(is_visible)
-        self.rotate_left_btn.setVisible(is_visible)
-        self.rotate_right_btn.setVisible(is_visible)
-        self.show_video_btn.setText("Hide Video" if is_visible else "Show Video")
-
     def rotate_video(self, angle):
         """Rotate video display"""
         if not hasattr(self, 'original_frame'):
@@ -1074,18 +1101,34 @@ class PitchAccentApp(QMainWindow):
         self.resize_video_display()
 
     def resize_video_display(self):
-        """Display the last frame at native resolution, let Qt scale"""
-        if not hasattr(self, 'original_frame'):
-            return
-        frame = self.original_frame.copy()
-        if self.current_rotation != 0:
-            if self.current_rotation == 90:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-            elif self.current_rotation == 180:
-                frame = cv2.rotate(frame, cv2.ROTATE_180)
-            elif self.current_rotation == 270:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        self.video_widget.setPixmap(QPixmap.fromImage(QImage(frame.tobytes(), frame.shape[1], frame.shape[0], QImage.Format.Format_RGB888)))
+        """Display the last frame at widget size, let Qt scale"""
+        try:
+            if not hasattr(self, 'original_frame') or self.original_frame is None:
+                print("No original frame available")
+                return
+            print("Resizing video display...")
+            frame = self.original_frame.copy()
+            if self.current_rotation != 0:
+                if self.current_rotation == 90:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                elif self.current_rotation == 180:
+                    frame = cv2.rotate(frame, cv2.ROTATE_180)
+                elif self.current_rotation == 270:
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            # Convert frame to QImage
+            height, width = frame.shape[:2]
+            bytes_per_line = 3 * width
+            q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
+            # Convert to QPixmap and scale to fit widget
+            pixmap = QPixmap.fromImage(q_image)
+            widget_size = self.video_widget.size()
+            scaled_pixmap = pixmap.scaled(widget_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.video_widget.setPixmap(scaled_pixmap)
+            print("Video display updated successfully")
+        except Exception as e:
+            print(f"Error in resize_video_display: {e}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
