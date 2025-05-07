@@ -24,7 +24,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.widgets import SpanSelector
 import json
-from PIL import Image
+from PIL import Image, ImageOps
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 import vlc
@@ -167,19 +167,16 @@ class PitchAccentApp(QMainWindow):
         
         # Add video controls
         video_buttons = QHBoxLayout()
-        self.rotate_left_btn = QPushButton("↺")
-        self.rotate_left_btn.clicked.connect(lambda: self.rotate_video(-90))
-        self.rotate_right_btn = QPushButton("↻")
-        self.rotate_right_btn.clicked.connect(lambda: self.rotate_video(90))
-        
-        self.pause_btn = QPushButton("Pause")
-        self.pause_btn.setEnabled(False)
-        self.pause_btn.clicked.connect(self.toggle_pause)
-        self.is_paused = False
-        
-        video_buttons.addWidget(self.rotate_left_btn)
-        video_buttons.addWidget(self.rotate_right_btn)
-        video_buttons.addWidget(self.pause_btn)
+        self.play_pause_btn = QPushButton("Play")
+        self.play_pause_btn.clicked.connect(self.toggle_play_pause)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_native)
+        self.loop_checkbox = QCheckBox("Loop")
+        self.loop_checkbox.setChecked(False)
+        video_buttons.addWidget(self.play_pause_btn)
+        video_buttons.addWidget(self.stop_btn)
+        video_buttons.addWidget(self.loop_checkbox)
         video_buttons.addStretch()
         
         video_container_layout.addWidget(self.video_widget)
@@ -188,28 +185,6 @@ class PitchAccentApp(QMainWindow):
         # Create controls section
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
-        
-        # Native audio controls
-        native_group = QFrame()
-        native_group.setFrameStyle(QFrame.Shape.StyledPanel)
-        native_layout = QVBoxLayout(native_group)
-        
-        native_label = QLabel("Native Audio")
-        native_label.setStyleSheet("font-weight: bold;")
-        self.clear_loop_btn = QPushButton("Clear Loop Selection")
-        self.clear_loop_btn.clicked.connect(self.clear_selection)
-        self.play_native_btn = QPushButton("Play Native")
-        self.play_native_btn.setEnabled(False)
-        self.loop_native_btn = QPushButton("Loop Native")
-        self.loop_native_btn.setEnabled(False)
-        self.stop_native_btn = QPushButton("Stop Native")
-        self.stop_native_btn.setEnabled(False)
-        
-        native_layout.addWidget(native_label)
-        native_layout.addWidget(self.clear_loop_btn)
-        native_layout.addWidget(self.play_native_btn)
-        native_layout.addWidget(self.loop_native_btn)
-        native_layout.addWidget(self.stop_native_btn)
         
         # Recording indicator
         self.recording_indicator = QLabel("")
@@ -248,7 +223,6 @@ class PitchAccentApp(QMainWindow):
         user_layout.addWidget(self.stop_user_btn)
         
         # Add groups to controls layout
-        controls_layout.addWidget(native_group)
         controls_layout.addWidget(user_group)
         
         # Add file selection button
@@ -315,9 +289,8 @@ class PitchAccentApp(QMainWindow):
         self.max_video_height = int(800 * scale)
 
         # Connect button signals
-        self.play_native_btn.clicked.connect(self.play_native)
-        self.loop_native_btn.clicked.connect(self.loop_native)
-        self.stop_native_btn.clicked.connect(self.stop_native)
+        self.play_pause_btn.clicked.connect(self.toggle_play_pause)
+        self.stop_btn.clicked.connect(self.stop_native)
         self.record_btn.clicked.connect(self.toggle_recording)
         self.play_user_btn.clicked.connect(self.play_user)
         self.loop_user_btn.clicked.connect(self.loop_user)
@@ -325,6 +298,21 @@ class PitchAccentApp(QMainWindow):
 
         # Enable drag & drop
         self.setAcceptDrops(True)
+
+        # Restore Clear Loop Selection button
+        self.clear_loop_btn = QPushButton("Clear Loop Selection")
+        self.clear_loop_btn.clicked.connect(self.clear_selection)
+        controls_layout.addWidget(self.clear_loop_btn)
+
+        # Single timer for overlay and state polling
+        self.vlc_poll_timer = QTimer()
+        self.vlc_poll_timer.setInterval(50)
+        self.vlc_poll_timer.timeout.connect(self.poll_vlc_state_and_overlay)
+        # Set up VLC end-of-media event for looping
+        self.vlc_events = self.vlc_player.event_manager()
+        self.vlc_events.event_attach(vlc.EventType.MediaPlayerEndReached, self.on_vlc_end_reached)
+
+        self._play_pause_debounce = False
 
     def signal_handler(self, sig, frame):
         """Handle Ctrl+C signal"""
@@ -466,45 +454,46 @@ class PitchAccentApp(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
 
     def load_file(self, file_path):
-        """Load and process the selected file"""
-        self._cleanup_playback_lines()
+        """Load a new file, ensuring clean state"""
+        # Stop any ongoing playback
+        self.vlc_player.stop()
+        self.vlc_poll_timer.stop()
+        self.play_pause_btn.setText("Play")
+        self.stop_btn.setEnabled(False)
+        self.update_native_playback_overlay(reset=True)
+        
+        # Process the file
         ext = os.path.splitext(file_path)[1].lower()
         audio_path = os.path.join(tempfile.gettempdir(), "temp_audio.wav")
-        if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-            video = VideoFileClip(file_path)
-            video.audio.write_audiofile(audio_path)
-            # Set video file for VLC
-            media = self.vlc_instance.media_new(file_path)
-            self.vlc_player.set_media(media)
-            self.video_widget.show()  # Always show video widget
-            # Store the first frame for rotation
-            cap = cv2.VideoCapture(file_path)
-            ret, frame = cap.read()
-            if ret:
-                self.original_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.current_rotation = 0
-                self.resize_video_display()  # Show first frame immediately
-            cap.release()
-        elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
-            audio = AudioFileClip(file_path)
-            audio.write_audiofile(audio_path)
-            self.vlc_player.set_media(None)
-            self.video_widget.hide()
-        else:
-            raise ValueError("Unsupported file type.")
         
-        # Store paths
-        self.native_audio_path = audio_path
-        self.video_path = file_path
-        
-        # Process audio
-        self.process_audio()
-        
-        # Enable controls
-        self.play_native_btn.setEnabled(True)
-        self.loop_native_btn.setEnabled(True)
-        self.stop_native_btn.setEnabled(True)
-        self.record_btn.setEnabled(True)
+        try:
+            if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
+                video = VideoFileClip(file_path)
+                video.audio.write_audiofile(audio_path)
+                # Set video file for VLC
+                media = self.vlc_instance.media_new(file_path)
+                self.vlc_player.set_media(media)
+                self.video_widget.show()
+            elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
+                audio = AudioFileClip(file_path)
+                audio.write_audiofile(audio_path)
+                self.vlc_player.set_media(None)
+                self.video_widget.hide()
+            else:
+                raise ValueError("Unsupported file type.")
+                
+            # Store paths and process audio
+            self.native_audio_path = audio_path
+            self.video_path = file_path
+            self.process_audio()
+            
+            # Enable controls
+            self.play_pause_btn.setEnabled(True)
+            self.loop_checkbox.setEnabled(True)
+            self.record_btn.setEnabled(True)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
 
     def process_audio(self):
         """Process the audio file to extract waveform and pitch"""
@@ -520,190 +509,114 @@ class PitchAccentApp(QMainWindow):
         self.native_voiced = voiced
         self.redraw_waveform()
 
-    def play_native(self):
-        """Play native audio and video (VLC)"""
-        try:
-            if self.playing:
-                return
-            self.playing = True
-            self.is_paused = False
-            self.play_native_btn.setEnabled(False)
-            self.loop_native_btn.setEnabled(False)
-            self.pause_btn.setEnabled(True)
-            self.pause_btn.setText("Pause")
-            # Start VLC video playback
-            if self.video_path and hasattr(self, 'original_frame'):
-                print("Starting VLC playback...")
-                self.vlc_player.audio_set_mute(True)  # Mute VLC audio to prevent double audio
-                self.vlc_player.play()
-                # Display the first frame immediately
-                self.resize_video_display()
-            self.start_native_playback_with_timer()
-        except Exception as e:
-            print(f"Error in play_native: {e}")
-            import traceback
-            traceback.print_exc()
-            self.playing = False
-            self.play_native_btn.setEnabled(True)
-            self.loop_native_btn.setEnabled(True)
+    def toggle_play_pause(self):
+        """Simple play/pause toggle"""
+        if self._play_pause_debounce:
+            return
+        self._play_pause_debounce = True
+        
+        state = self.vlc_player.get_state()
+        
+        if state in [vlc.State.Playing, vlc.State.Buffering]:
+            self.vlc_player.pause()
+            self.play_pause_btn.setText("Play")
+        else:
+            # If at end or stopped, start from beginning
+            if state in [vlc.State.Ended, vlc.State.Stopped]:
+                self.vlc_player.set_time(0)
+            self.vlc_player.play()
+            self.play_pause_btn.setText("Pause")
+            self.stop_btn.setEnabled(True)
+            
+        self.vlc_poll_timer.start()
+        QTimer.singleShot(200, self._reset_play_pause_debounce)
 
-    def start_native_playback_with_timer(self):
-        import time
-        from PyQt6.QtCore import QTimer
-        self._cleanup_playback_lines()
-        if hasattr(self, 'native_playback_line') and self.native_playback_line:
-            self.native_playback_line.remove()
-        self.native_playback_line = self.ax_native.axvline(0, color='red', linestyle='--', linewidth=2)
-        self.canvas.draw_idle()
-        self.native_playback_start_time = time.time()
-        self._paused_elapsed = 0
-        # Determine playback range
-        try:
-            import numpy as np
-            import scipy.io.wavfile as wavfile
-            sample_rate, audio_data = wavfile.read(self.native_audio_path)
-            if self._loop_end is not None and self._loop_end > self._loop_start:
-                start_sample = int(self._loop_start * sample_rate)
-                end_sample = int(self._loop_end * sample_rate)
-                audio_data = audio_data[start_sample:end_sample]
-                duration = (end_sample - start_sample) / sample_rate
-                offset = self._loop_start
+    def _reset_play_pause_debounce(self):
+        self._play_pause_debounce = False
+
+    def poll_vlc_state_and_overlay(self):
+        state = self.vlc_player.get_state()
+        # Update Play/Pause button label
+        if state in [vlc.State.Playing, vlc.State.Buffering]:
+            self.play_pause_btn.setText("Pause")
+        else:
+            self.play_pause_btn.setText("Play")
+        # Update overlay
+        ms = self.vlc_player.get_time()
+        if ms is not None and ms >= 0:
+            t = ms / 1000.0
+            if not hasattr(self, 'native_playback_line') or self.native_playback_line is None:
+                self.native_playback_line = self.ax_native.axvline(t, color='red', linestyle='--', linewidth=2)
             else:
-                duration = len(audio_data) / sample_rate
-                offset = 0
-        except Exception:
-            duration = 0
-            offset = 0
-        self.native_playback_timer = QTimer()
-        self.native_playback_timer.setInterval(20)
-        def update_playback_line_and_video():
-            if self.is_paused:
-                self._paused_elapsed = time.time() - self.native_playback_start_time
-                return
-            elapsed = time.time() - self.native_playback_start_time
-            pos = offset + elapsed
-            try:
-                if self.native_playback_line and self.native_playback_line in self.ax_native.lines:
-                    self.native_playback_line.set_xdata([pos, pos])
-                    self.canvas.draw_idle()
-            except Exception:
-                pass
-            # --- Video sync logic ---
-            if hasattr(self, 'cap') and hasattr(self, 'video_path') and self.cap.isOpened():
-                import cv2
-                video_fps = self.cap.get(cv2.CAP_PROP_FPS)
-                frame_count = self.cap.get(cv2.CAP_PROP_FRAME_COUNT)
-                video_duration = frame_count / video_fps if video_fps > 0 else 0
-                if video_duration > 0:
-                    video_time = min(elapsed, video_duration)
-                    frame_idx = int(video_time * video_fps)
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                    ret, frame = self.cap.read()
-                    if ret:
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        if self.current_rotation != 0:
-                            if self.current_rotation == 90:
-                                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                            elif self.current_rotation == 180:
-                                frame = cv2.rotate(frame, cv2.ROTATE_180)
-                            elif self.current_rotation == 270:
-                                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                        self.video_widget.setPixmap(QPixmap.fromImage(QImage(frame.tobytes(), frame.shape[1], frame.shape[0], QImage.Format.Format_RGB888)))
-            # --- End video sync logic ---
-            if elapsed >= duration or not self.playing:
+                self.native_playback_line.set_xdata([t, t])
+            self.canvas.draw_idle()
+        # If stopped, clean up overlay and timer
+        if state == vlc.State.Stopped:
+            self.vlc_poll_timer.stop()
+            self.play_pause_btn.setText("Play")
+            self.stop_btn.setEnabled(False)
+            self.show_first_frame_after_stop()
+
+    def stop_native(self):
+        """Stop playback and reset to first frame"""
+        self.vlc_player.stop()
+        self.vlc_player.set_time(0)
+        self.play_pause_btn.setText("Play")
+        self.stop_btn.setEnabled(False)
+        self.vlc_poll_timer.stop()
+        self.update_native_playback_overlay(reset=True)
+        self.show_first_frame_after_stop()
+
+    def show_first_frame_after_stop(self):
+        """Show first frame after stopping"""
+        self.vlc_player.play()
+        QTimer.singleShot(100, lambda: (
+            self.vlc_player.pause(),
+            self.vlc_player.set_time(0)
+        ))
+
+    def on_vlc_end_reached(self, event):
+        """Handle end of media"""
+        def handle_end():
+            self.vlc_player.stop()
+            self.vlc_poll_timer.stop()
+            self.update_native_playback_overlay(reset=True)
+            
+            if self.loop_checkbox.isChecked():
+                # If looping, restart after a short delay
+                QTimer.singleShot(100, lambda: (
+                    self.vlc_player.set_time(0),
+                    self.vlc_player.play(),
+                    self.vlc_poll_timer.start(),
+                    self.play_pause_btn.setText("Pause"),
+                    self.stop_btn.setEnabled(True)
+                ))
+            else:
+                # If not looping, just show first frame
+                self.play_pause_btn.setText("Play")
+                self.stop_btn.setEnabled(False)
+                self.show_first_frame_after_stop()
+                
+        QTimer.singleShot(0, handle_end)
+
+    def update_native_playback_overlay(self, reset=False):
+        if reset:
+            if hasattr(self, 'native_playback_line') and self.native_playback_line:
                 try:
-                    self.native_playback_timer.stop()
-                except Exception:
-                    pass
-                try:
-                    if self.native_playback_line and self.native_playback_line in self.ax_native.lines:
-                        self.native_playback_line.remove()
+                    self.native_playback_line.remove()
                 except Exception:
                     pass
                 self.native_playback_line = None
-                try:
-                    self.canvas.draw_idle()
-                except Exception:
-                    pass
-                self.pause_btn.setEnabled(False)
-        self.native_playback_timer.timeout.connect(update_playback_line_and_video)
-        self.native_playback_timer.start()
-        import threading
-        threading.Thread(target=self._play_native_thread, daemon=True).start()
-
-    def _play_native_thread(self):
-        try:
-            print("Starting native audio playback thread...")
-            import numpy as np
-            import scipy.io.wavfile as wavfile
-            sample_rate, audio_data = wavfile.read(self.native_audio_path)
-            if self._loop_end is not None and self._loop_end > self._loop_start:
-                start_sample = int(self._loop_start * sample_rate)
-                end_sample = int(self._loop_end * sample_rate)
-                audio_data = audio_data[start_sample:end_sample]
-            duration = len(audio_data) / sample_rate
-            # Stop any existing playback before starting new one
-            sd.stop()
-            sd.wait()  # Wait for stop to complete
-            print("Playing audio...")
-            sd.play(audio_data, sample_rate)
-            sd.wait()
-            print("Audio playback completed")
-            self.playing = False
-        except Exception as e:
-            print(f"Error during playback: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.playing = False
-            self.play_native_btn.setEnabled(True)
-            self.loop_native_btn.setEnabled(True)
-
-    def loop_native(self):
-        """Loop native audio"""
-        if self.playing:
+                self.canvas.draw_idle()
             return
-            
-        self.playing = True
-        self.play_native_btn.setEnabled(False)
-        self.loop_native_btn.setEnabled(False)
-        
-        # Start loop playback in a separate thread
-        threading.Thread(target=self._loop_native_thread, daemon=True).start()
-
-    def _loop_native_thread(self):
-        """Thread function for native audio loop playback"""
-        try:
-            # Load audio data
-            sample_rate, audio_data = wavfile.read(self.native_audio_path)
-            
-            # Apply loop if set
-            if self._loop_end is not None:
-                start_sample = int(self._loop_start * sample_rate)
-                end_sample = int(self._loop_end * sample_rate)
-                audio_data = audio_data[start_sample:end_sample]
-            
-            # Loop playback
-            while self.playing:
-                sd.play(audio_data, sample_rate)
-                sd.wait()
-                
-        except Exception as e:
-            print(f"Error during loop playback: {e}")
-        finally:
-            self.playing = False
-            self.play_native_btn.setEnabled(True)
-            self.loop_native_btn.setEnabled(True)
-
-    def stop_native(self):
-        """Stop native audio and video playback"""
-        self.playing = False
-        sd.stop()
-        self._cleanup_playback_lines()
-        # Stop VLC video playback but keep the frame visible
-        self.vlc_player.stop()
-        if hasattr(self, 'original_frame'):
-            self.resize_video_display()
+        ms = self.vlc_player.get_time()
+        if ms is not None and ms >= 0:
+            t = ms / 1000.0
+            if not hasattr(self, 'native_playback_line') or self.native_playback_line is None:
+                self.native_playback_line = self.ax_native.axvline(t, color='red', linestyle='--', linewidth=2)
+            else:
+                self.native_playback_line.set_xdata([t, t])
+            self.canvas.draw_idle()
 
     def toggle_recording(self):
         """Toggle recording state"""
@@ -1027,20 +940,6 @@ class PitchAccentApp(QMainWindow):
             self.canvas.draw_idle()
 
     def _cleanup_playback_lines(self):
-        # Stop native playback timer and remove line
-        try:
-            if hasattr(self, 'native_playback_timer') and self.native_playback_timer is not None:
-                self.native_playback_timer.stop()
-                self.native_playback_timer = None
-        except Exception:
-            pass
-        try:
-            if hasattr(self, 'native_playback_line') and self.native_playback_line is not None:
-                if self.native_playback_line in self.ax_native.lines:
-                    self.native_playback_line.remove()
-                self.native_playback_line = None
-        except Exception:
-            pass
         # Stop user playback timer and remove line
         try:
             if hasattr(self, 'user_playback_timer') and self.user_playback_timer is not None:
@@ -1055,42 +954,6 @@ class PitchAccentApp(QMainWindow):
                 self.user_playback_line = None
         except Exception:
             pass
-
-    def toggle_pause(self):
-        """Pause or resume audio and video playback"""
-        if not self.playing:
-            return
-        self.is_paused = not self.is_paused
-        if self.is_paused:
-            sd.stop()
-            self.pause_btn.setText("Resume")
-            self.vlc_player.pause()
-        else:
-            self.native_playback_start_time = time.time() - self._paused_elapsed
-            self.pause_btn.setText("Pause")
-            self.vlc_player.set_pause(0)
-            # Resume audio playback from where it was paused
-            import threading
-            threading.Thread(target=self._play_native_thread_resume, daemon=True).start()
-
-    def _play_native_thread_resume(self):
-        try:
-            import numpy as np
-            import scipy.io.wavfile as wavfile
-            sample_rate, audio_data = wavfile.read(self.native_audio_path)
-            if self._loop_end is not None and self._loop_end > self._loop_start:
-                start_sample = int(self._loop_start * sample_rate)
-                end_sample = int(self._loop_end * sample_rate)
-                audio_data = audio_data[start_sample:end_sample]
-            duration = len(audio_data) / sample_rate
-            # Resume from paused position
-            start_sample = int(self._paused_elapsed * sample_rate)
-            audio_data = audio_data[start_sample:]
-            sd.play(audio_data, sample_rate)
-            sd.wait()
-            self.playing = False
-        except Exception as e:
-            print(f"Error during resume playback: {e}")
 
     def rotate_video(self, angle):
         """Rotate video display"""
@@ -1115,15 +978,15 @@ class PitchAccentApp(QMainWindow):
                     frame = cv2.rotate(frame, cv2.ROTATE_180)
                 elif self.current_rotation == 270:
                     frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            # Convert frame to QImage
-            height, width = frame.shape[:2]
-            bytes_per_line = 3 * width
-            q_image = QImage(frame.data, width, height, bytes_per_line, QImage.Format.Format_RGB888)
-            # Convert to QPixmap and scale to fit widget
-            pixmap = QPixmap.fromImage(q_image)
             widget_size = self.video_widget.size()
-            scaled_pixmap = pixmap.scaled(widget_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            self.video_widget.setPixmap(scaled_pixmap)
+            pil_img = Image.fromarray(frame)
+            # Use ImageOps.contain to preserve aspect ratio and fit in widget
+            pil_img = ImageOps.contain(pil_img, (max(1, widget_size.width()), max(1, widget_size.height())), Image.LANCZOS)
+            rgb_img = pil_img.convert('RGB')
+            img_data = rgb_img.tobytes('raw', 'RGB')
+            q_image = QImage(img_data, pil_img.width, pil_img.height, 3 * pil_img.width, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(q_image)
+            self.video_widget.setPixmap(pixmap)
             print("Video display updated successfully")
         except Exception as e:
             print(f"Error in resize_video_display: {e}")
