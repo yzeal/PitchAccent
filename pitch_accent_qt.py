@@ -15,10 +15,10 @@ from scipy.signal import medfilt, savgol_filter
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QCheckBox, QLineEdit,
-    QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider
+    QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider, QDialog, QFormLayout, QDialogButtonBox, QKeySequenceEdit
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl
-from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter
+from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -140,11 +140,16 @@ class PitchAccentApp(QMainWindow):
         # Add loop info label
         self.loop_info_label = QLabel("Loop: Full clip")
         
+        # Add Keyboard Shortcuts button
+        self.shortcuts_btn = QPushButton("Keyboard Shortcuts")
+        self.shortcuts_btn.clicked.connect(self.show_shortcuts_dialog)
+        
         # Add widgets to top layout
         top_layout.addWidget(input_label)
         top_layout.addWidget(self.input_selector)
         top_layout.addWidget(output_label)
         top_layout.addWidget(self.output_selector)
+        top_layout.addWidget(self.shortcuts_btn)
         top_layout.addStretch()
         top_layout.addWidget(self.loop_info_label)
         
@@ -312,6 +317,20 @@ class PitchAccentApp(QMainWindow):
         self.vlc_events.event_attach(vlc.EventType.MediaPlayerEndReached, self.on_vlc_end_reached)
 
         self._play_pause_debounce = False
+
+        # Keyboard shortcuts setup
+        self.shortcut_file = os.path.join(tempfile.gettempdir(), "pitch_accent_shortcuts.json")
+        self.default_shortcuts = {
+            "play_pause": "Space",
+            "clear_loop": "C",
+            "loop_checkbox": "L",
+            "record": "R",
+            "play_user": "E",
+            "loop_user": "W",
+            "stop_user": "Q"
+        }
+        self.shortcuts = self.load_shortcuts()
+        self.setup_shortcuts()
 
     def signal_handler(self, sig, frame):
         """Handle Ctrl+C signal"""
@@ -1045,6 +1064,110 @@ class PitchAccentApp(QMainWindow):
     def on_loop_changed(self, state):
         """Handle loop checkbox state change"""
         self._is_looping = state == Qt.CheckState.Checked.value
+
+    def setup_shortcuts(self):
+        # Remove old shortcuts if they exist (delete QShortcut objects)
+        for attr in ["play_pause_sc", "clear_loop_sc", "loop_checkbox_sc", "record_sc", "play_user_sc", "loop_user_sc", "stop_user_sc"]:
+            if hasattr(self, attr):
+                old = getattr(self, attr)
+                old.setParent(None)
+                del old
+        # Play/Pause
+        self.play_pause_sc = QShortcut(QKeySequence(self.shortcuts["play_pause"]), self)
+        self.play_pause_sc.activated.connect(self.toggle_play_pause)
+        # Clear Loop Selection
+        self.clear_loop_sc = QShortcut(QKeySequence(self.shortcuts["clear_loop"]), self)
+        self.clear_loop_sc.activated.connect(self.clear_selection)
+        # Loop Checkbox
+        self.loop_checkbox_sc = QShortcut(QKeySequence(self.shortcuts["loop_checkbox"]), self)
+        self.loop_checkbox_sc.activated.connect(lambda: self.loop_checkbox.toggle())
+        # Record
+        self.record_sc = QShortcut(QKeySequence(self.shortcuts["record"]), self)
+        self.record_sc.activated.connect(self.toggle_recording)
+        # Play User
+        self.play_user_sc = QShortcut(QKeySequence(self.shortcuts["play_user"]), self)
+        self.play_user_sc.activated.connect(self.play_user)
+        # Loop User
+        self.loop_user_sc = QShortcut(QKeySequence(self.shortcuts["loop_user"]), self)
+        self.loop_user_sc.activated.connect(self.loop_user)
+        # Stop User
+        self.stop_user_sc = QShortcut(QKeySequence(self.shortcuts["stop_user"]), self)
+        self.stop_user_sc.activated.connect(self.stop_user)
+
+    def load_shortcuts(self):
+        try:
+            if os.path.exists(self.shortcut_file):
+                with open(self.shortcut_file, "r") as f:
+                    data = json.load(f)
+                # Fill in any missing keys with defaults
+                for k, v in self.default_shortcuts.items():
+                    if k not in data:
+                        data[k] = v
+                return data
+        except Exception:
+            pass
+        return dict(self.default_shortcuts)
+
+    def save_shortcuts(self):
+        try:
+            with open(self.shortcut_file, "w") as f:
+                json.dump(self.shortcuts, f)
+        except Exception:
+            pass
+
+    def normalize_shortcut(self, seq):
+        # Map common special keys to their canonical names
+        mapping = {
+            " ": "Space",
+            "Space": "Space",
+            "Backspace": "Backspace",
+            "Tab": "Tab",
+            "Return": "Return",
+            "Enter": "Return",
+            "Esc": "Escape",
+            "Escape": "Escape",
+        }
+        s = seq.strip()
+        if s in mapping:
+            return mapping[s]
+        return s
+
+    def show_shortcuts_dialog(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Keyboard Shortcuts")
+        layout = QFormLayout(dlg)
+        edits = {}
+        # Map: label, key in self.shortcuts
+        shortcut_map = [
+            ("Play/Pause (Native)", "play_pause"),
+            ("Clear Loop Selection", "clear_loop"),
+            ("Loop Checkbox", "loop_checkbox"),
+            ("Record", "record"),
+            ("Play User", "play_user"),
+            ("Loop User", "loop_user"),
+            ("Stop User", "stop_user"),
+        ]
+        for label, key in shortcut_map:
+            edit = QKeySequenceEdit(QKeySequence(self.shortcuts[key]))
+            edits[key] = edit
+            layout.addRow(label, edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        layout.addRow(buttons)
+        def accept():
+            # Save new shortcuts
+            for key in edits:
+                seq = edits[key].keySequence().toString()
+                if seq:
+                    self.shortcuts[key] = self.normalize_shortcut(seq)
+            self.save_shortcuts()
+            self.setup_shortcuts()
+            dlg.accept()
+        buttons.accepted.connect(accept)
+        buttons.rejected.connect(dlg.reject)
+        dlg.exec()
+
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
