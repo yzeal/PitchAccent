@@ -1005,7 +1005,21 @@ class PitchAccentApp(QMainWindow):
             self._loop_start = 0.0
             self._loop_end = max_end
             self.update_loop_info()
+            # Remove selection patch if present
+            if hasattr(self, 'selection_patch') and self.selection_patch is not None:
+                try:
+                    self.selection_patch.remove()
+                except Exception:
+                    pass
+                self.selection_patch = None
+            # Clear the span selector (removes selection rectangle)
+            if hasattr(self, 'span') and self.span is not None:
+                try:
+                    self.span.clear()
+                except Exception:
+                    pass
             self.redraw_waveform()
+            self.canvas.draw_idle()
 
     def _cleanup_playback_lines(self):
         # Stop user playback timer and remove line
