@@ -172,7 +172,7 @@ class PitchAccentApp(QMainWindow):
         video_buttons = QHBoxLayout()
         self.play_pause_btn = QPushButton("Play")
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
-        self.stop_btn = QPushButton("Reset")
+        self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
         self.loop_checkbox = QCheckBox("Loop")
         self.loop_checkbox.setChecked(True)
@@ -186,32 +186,41 @@ class PitchAccentApp(QMainWindow):
         video_container_layout.addWidget(self.video_widget)
         video_container_layout.addLayout(video_buttons)
         
-        # Create controls section
+        # Create controls section (right side)
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
-        
+        controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Native Audio label
+        native_label = QLabel("Native Audio")
+        native_label.setStyleSheet("font-weight: bold;")
+        controls_layout.addWidget(native_label)
+
+        # Select Video File button
+        self.select_file_btn = QPushButton("Select Video File")
+        self.select_file_btn.clicked.connect(self.select_file)
+        controls_layout.addWidget(self.select_file_btn)
+
+        # Clear Loop Selection button
+        self.clear_loop_btn = QPushButton("Clear Loop Selection")
+        self.clear_loop_btn.clicked.connect(self.clear_selection)
+        controls_layout.addWidget(self.clear_loop_btn)
+
+        # Spacer
+        controls_layout.addSpacing(20)
+
+        # User Audio label
+        user_label = QLabel("User Audio")
+        user_label.setStyleSheet("font-weight: bold;")
+        controls_layout.addWidget(user_label)
+
         # Recording indicator
         self.recording_indicator = QLabel("")
         self.recording_indicator.setStyleSheet("color: red; font-weight: bold; font-size: 16px;")
         self.recording_indicator.setVisible(False)
         controls_layout.addWidget(self.recording_indicator)
-        
-        # User audio controls
-        user_group = QFrame()
-        user_group.setFrameStyle(QFrame.Shape.StyledPanel)
-        user_layout = QVBoxLayout(user_group)
-        
-        user_label = QLabel("User Audio")
-        user_label.setStyleSheet("font-weight: bold;")
-        # Recording indicator next to label
-        user_label_row = QHBoxLayout()
-        user_label_row.addWidget(user_label)
-        self.recording_indicator = QLabel("")
-        self.recording_indicator.setStyleSheet("color: red; font-weight: bold; font-size: 16px;")
-        self.recording_indicator.setVisible(False)
-        user_label_row.addWidget(self.recording_indicator)
-        user_label_row.addStretch()
-        user_layout.addLayout(user_label_row)
+
+        # User audio buttons
         self.record_btn = QPushButton("Record")
         self.record_btn.setEnabled(True)
         self.play_user_btn = QPushButton("Play User")
@@ -220,20 +229,11 @@ class PitchAccentApp(QMainWindow):
         self.loop_user_btn.setEnabled(False)
         self.stop_user_btn = QPushButton("Stop User")
         self.stop_user_btn.setEnabled(False)
-        
-        user_layout.addWidget(self.record_btn)
-        user_layout.addWidget(self.play_user_btn)
-        user_layout.addWidget(self.loop_user_btn)
-        user_layout.addWidget(self.stop_user_btn)
-        
-        # Add groups to controls layout
-        controls_layout.addWidget(user_group)
-        
-        # Add file selection button
-        self.select_file_btn = QPushButton("Select Video File")
-        self.select_file_btn.clicked.connect(self.select_file)
-        controls_layout.addWidget(self.select_file_btn)
-        
+        controls_layout.addWidget(self.record_btn)
+        controls_layout.addWidget(self.play_user_btn)
+        controls_layout.addWidget(self.loop_user_btn)
+        controls_layout.addWidget(self.stop_user_btn)
+
         # Add video and controls to layout
         video_controls_layout.addWidget(video_container, stretch=2)
         video_controls_layout.addWidget(controls, stretch=1)
@@ -302,11 +302,6 @@ class PitchAccentApp(QMainWindow):
 
         # Enable drag & drop
         self.setAcceptDrops(True)
-
-        # Restore Clear Loop Selection button
-        self.clear_loop_btn = QPushButton("Clear Loop Selection")
-        self.clear_loop_btn.clicked.connect(self.clear_selection)
-        controls_layout.addWidget(self.clear_loop_btn)
 
         # Single timer for overlay and state polling
         self.vlc_poll_timer = QTimer()
@@ -407,9 +402,9 @@ class PitchAccentApp(QMainWindow):
                 self.ax_native.axvline(self._loop_start, color='blue', linestyle='-', linewidth=2)
                 self.ax_native.axvline(self._loop_end, color='blue', linestyle='-', linewidth=2)
                 # Draw outside selection area with darker overlay
+                max_end = self._clip_duration - self._default_selection_margin - 0.05
                 if self._loop_start > 0:
                     self.ax_native.axvspan(0, self._loop_start, color='gray', alpha=0.3)
-                max_end = self._clip_duration - self._default_selection_margin - 0.05
                 if self._loop_end < max_end:
                     self.ax_native.axvspan(self._loop_end, max_end, color='gray', alpha=0.3)
             
@@ -425,6 +420,18 @@ class PitchAccentApp(QMainWindow):
             
             # Set x limits to max selectable end
             self.ax_native.set_xlim(0, max_end)
+            
+            # Always draw the playback position line (red)
+            playback_time = 0.0
+            try:
+                ms = self.vlc_player.get_time()
+                if ms is not None and ms >= 0:
+                    playback_time = ms / 1000.0
+            except Exception:
+                pass
+            # Clamp to axis range
+            playback_time = max(0.0, min(playback_time, max_end))
+            self.native_playback_line = self.ax_native.axvline(playback_time, color='red', linestyle='--', linewidth=2)
         
         # User pitch
         self.ax_user.clear()
@@ -600,13 +607,16 @@ class PitchAccentApp(QMainWindow):
         
         # Update overlay
         ms = self.vlc_player.get_time()
+        max_end = self._clip_duration - self._default_selection_margin - 0.05
+        t = 0.0
         if ms is not None and ms >= 0:
             t = ms / 1000.0
-            if not hasattr(self, 'native_playback_line') or self.native_playback_line is None:
-                self.native_playback_line = self.ax_native.axvline(t, color='red', linestyle='--', linewidth=2)
-            else:
-                self.native_playback_line.set_xdata([t, t])
-            self.canvas.draw_idle()
+        t = max(0.0, min(t, max_end))
+        if not hasattr(self, 'native_playback_line') or self.native_playback_line is None:
+            self.native_playback_line = self.ax_native.axvline(t, color='red', linestyle='--', linewidth=2)
+        else:
+            self.native_playback_line.set_xdata([t, t])
+        self.canvas.draw_idle()
 
     def stop_native(self):
         """Reset to start (or loop start) and pause"""
