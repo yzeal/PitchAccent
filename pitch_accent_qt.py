@@ -167,11 +167,12 @@ class PitchAccentApp(QMainWindow):
         # Create video display
         self.vlc_instance = vlc.Instance()
         self.vlc_player = self.vlc_instance.media_player_new()
-        self.video_widget = QLabel()  # Changed from QWidget to QLabel
+        self.video_widget = QWidget()
+        self.video_widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.video_widget.setMinimumSize(400, 300)
         self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.video_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Center the image
-        self.vlc_player.set_hwnd(int(self.video_widget.winId()))  # Windows only
+        self.video_widget.show()
+        self.video_widget.repaint()
         
         # Add video controls
         video_buttons = QHBoxLayout()
@@ -493,62 +494,125 @@ class PitchAccentApp(QMainWindow):
         self.canvas.draw()
 
     def select_file(self):
-        """Handle file selection"""
+        print("[DEBUG] select_file: called")
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Video File",
             "",
             "Video Files (*.mp4 *.avi *.mov);;All Files (*.*)"
         )
-        
+        print(f"[DEBUG] select_file: file_path={file_path}")
         if file_path:
             try:
                 self.load_file(file_path)
             except Exception as e:
+                print(f"[DEBUG] select_file: Exception: {e}")
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
 
     def load_file(self, file_path):
-        """Load a new file, ensuring clean state"""
-        # Stop any ongoing playback
-        self.vlc_player.stop()
-        self.vlc_poll_timer.stop()
-        self.play_pause_btn.setText("Play")
-        self.stop_btn.setEnabled(False)
-        self.update_native_playback_overlay(reset=True)
-        
-        # Process the file
-        ext = os.path.splitext(file_path)[1].lower()
-        audio_path = os.path.join(tempfile.gettempdir(), "temp_audio.wav")
-        
-        try:
-            if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-                video = VideoFileClip(file_path)
-                video.audio.write_audiofile(audio_path)
-                # Set video file for VLC
-                media = self.vlc_instance.media_new(file_path)
-                self.vlc_player.set_media(media)
-                self.video_widget.show()
-            elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
-                audio = AudioFileClip(file_path)
-                audio.write_audiofile(audio_path)
+        print(f"[DEBUG] load_file: called with {file_path}")
+        def after_vlc_stopped():
+            print("[DEBUG] load_file: destroying and recreating VLC player and video widget instance")
+            try:
+                # Remove old player and video widget and create new ones
                 self.vlc_player.set_media(None)
-                self.video_widget.hide()
-            else:
-                raise ValueError("Unsupported file type.")
-                
-            # Store paths and process audio
-            self.native_audio_path = audio_path
-            self.video_path = file_path
-            self.process_audio()
-            
-            # Enable controls and show first frame
-            self.play_pause_btn.setEnabled(True)
-            self.loop_checkbox.setEnabled(True)
-            self.record_btn.setEnabled(True)
-            self.show_first_frame()
-            
+                del self.vlc_player
+                # Remove old video widget from layout and delete
+                video_container_layout = self.video_widget.parentWidget().layout()
+                video_container_layout.removeWidget(self.video_widget)
+                self.video_widget.deleteLater()
+                # Create new video widget
+                self.video_widget = QWidget()
+                self.video_widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+                self.video_widget.setMinimumSize(400, 300)
+                self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                self.video_widget.show()
+                self.video_widget.repaint()
+                # Add new video widget to layout at index 0
+                video_container_layout.insertWidget(0, self.video_widget)
+                self.vlc_player = self.vlc_instance.media_player_new()
+                self.vlc_player.set_hwnd(int(self.video_widget.winId()))
+                # Re-attach poll timer and event
+                self.vlc_poll_timer.timeout.disconnect()
+                self.vlc_poll_timer.timeout.connect(self.poll_vlc_state_and_overlay)
+                self.vlc_events = self.vlc_player.event_manager()
+                self.vlc_events.event_attach(vlc.EventType.MediaPlayerEndReached, self.on_vlc_end_reached)
+                print("[DEBUG] load_file: VLC player and video widget instance recreated")
+            except Exception as e:
+                print(f"[DEBUG] load_file: Exception while recreating VLC player/video widget: {e}")
+            print("[DEBUG] load_file: stopping vlc_poll_timer")
+            self.vlc_poll_timer.stop()
+            print("[DEBUG] load_file: stopped vlc_poll_timer")
+            self.play_pause_btn.setText("Play")
+            self.stop_btn.setEnabled(False)
+            print("[DEBUG] load_file: updating native playback overlay (reset=True)")
+            self.update_native_playback_overlay(reset=True)
+            print("[DEBUG] load_file: updated native playback overlay")
+            # Process the file
+            ext = os.path.splitext(file_path)[1].lower()
+            audio_path = os.path.join(tempfile.gettempdir(), "temp_audio.wav")
+            try:
+                print(f"[DEBUG] load_file: file extension is {ext}")
+                if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
+                    print("[DEBUG] load_file: creating VideoFileClip")
+                    video = VideoFileClip(file_path)
+                    print("[DEBUG] load_file: extracting audio from video")
+                    video.audio.write_audiofile(audio_path)
+                    print("[DEBUG] load_file: audio extracted")
+                    print("[DEBUG] load_file: setting media for VLC")
+                    self.vlc_player.set_hwnd(int(self.video_widget.winId()))
+                    media = self.vlc_instance.media_new(file_path)
+                    self.vlc_player.set_media(media)
+                    print("[DEBUG] load_file: media set for VLC")
+                    self.video_widget.show()
+                elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
+                    print("[DEBUG] load_file: creating AudioFileClip")
+                    audio = AudioFileClip(file_path)
+                    print("[DEBUG] load_file: extracting audio from audio file")
+                    audio.write_audiofile(audio_path)
+                    print("[DEBUG] load_file: audio extracted")
+                    self.vlc_player.set_hwnd(int(self.video_widget.winId()))
+                    self.vlc_player.set_media(None)
+                    self.vlc_player.stop()
+                    self.video_widget.hide()
+                else:
+                    print("[DEBUG] load_file: unsupported file type")
+                    raise ValueError("Unsupported file type.")
+                print("[DEBUG] load_file: storing paths and processing audio")
+                self.native_audio_path = audio_path
+                self.video_path = file_path
+                self.process_audio()
+                print("[DEBUG] load_file: processed audio")
+                # Enable controls and show first frame
+                self.play_pause_btn.setEnabled(True)
+                self.loop_checkbox.setEnabled(True)
+                self.record_btn.setEnabled(True)
+                print("[DEBUG] load_file: showing first frame")
+                self.show_first_frame()
+                print("[DEBUG] load_file: showed first frame")
+            except Exception as e:
+                print(f"[DEBUG] load_file: Exception in file processing: {e}")
+                QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
+        try:
+            state = self.vlc_player.get_state()
+            print(f"[DEBUG] load_file: VLC player state before stop: {state}")
+            print("[DEBUG] load_file: destroying and recreating VLC player instance (pre-emptive)")
+            self.vlc_player.set_media(None)
+            del self.vlc_player
+            self.vlc_player = self.vlc_instance.media_player_new()
+            self.video_widget.show()
+            self.video_widget.repaint()
+            self.vlc_player.set_hwnd(int(self.video_widget.winId()))
+            # Re-attach poll timer and event
+            self.vlc_poll_timer.timeout.disconnect()
+            self.vlc_poll_timer.timeout.connect(self.poll_vlc_state_and_overlay)
+            self.vlc_events = self.vlc_player.event_manager()
+            self.vlc_events.event_attach(vlc.EventType.MediaPlayerEndReached, self.on_vlc_end_reached)
+            print("[DEBUG] load_file: VLC player instance recreated (pre-emptive)")
+            after_vlc_stopped()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
+            print(f"[DEBUG] load_file: Exception: {e}")
+            raise
 
     def process_audio(self):
         """Process the audio file to extract waveform and pitch"""
