@@ -99,10 +99,18 @@ class PitchAccentApp(QMainWindow):
         self.current_rotation = 0
         self.original_frame = None
         self._is_looping = False
+        self.zoomed = False
         
         # Get audio devices
         self.input_devices = [d for d in sd.query_devices() if d['max_input_channels'] > 0]
         self.output_devices = [d for d in sd.query_devices() if d['max_output_channels'] > 0]
+        
+        # Initialize VLC instance with default audio output
+        vlc_args = [
+            '--no-audio-time-stretch',
+            '--aout=any'  # Use platform's default audio output
+        ]
+        self.vlc_instance = vlc.Instance(vlc_args)
         
         # Setup UI
         self.setup_ui()
@@ -114,6 +122,10 @@ class PitchAccentApp(QMainWindow):
         self.selection_lock = threading.Lock()
         self.playback_lock = threading.Lock()
         self.recording_lock = threading.Lock()
+
+        # Connect device selection signals
+        self.input_selector.currentIndexChanged.connect(self.on_input_device_changed)
+        self.output_selector.currentIndexChanged.connect(self.on_output_device_changed)
 
     def setup_ui(self):
         """Initialize the main UI components"""
@@ -211,6 +223,13 @@ class PitchAccentApp(QMainWindow):
         self.clear_loop_btn = QPushButton("Clear Loop Selection")
         self.clear_loop_btn.clicked.connect(self.clear_selection)
         controls_layout.addWidget(self.clear_loop_btn)
+
+        # Zoom button
+        self.zoom_btn = QPushButton("Zoom")
+        self.zoom_btn.setCheckable(True)
+        self.zoom_btn.setEnabled(False)
+        self.zoom_btn.toggled.connect(self.toggle_zoom)
+        controls_layout.addWidget(self.zoom_btn)
 
         # Spacer
         controls_layout.addSpacing(20)
@@ -328,7 +347,8 @@ class PitchAccentApp(QMainWindow):
             "record": "R",
             "play_user": "E",
             "loop_user": "W",
-            "stop_user": "Q"
+            "stop_user": "Q",
+            "zoom": "Z"
         }
         self.shortcuts = self.load_shortcuts()
         self.setup_shortcuts()
@@ -373,6 +393,13 @@ class PitchAccentApp(QMainWindow):
             self._loop_start = max(0.0, xmin)
             self._loop_end = min(max_end, xmax)
             self.update_loop_info()
+            # Enable zoom if a loop is selected (not full clip)
+            if self._loop_start > 0.0 or self._loop_end < max_end:
+                self.zoom_btn.setEnabled(True)
+            else:
+                self.zoom_btn.setEnabled(False)
+                self.zoomed = False
+                self.zoom_btn.setChecked(False)
             self.redraw_waveform()
 
     def update_loop_info(self):
@@ -438,8 +465,11 @@ class PitchAccentApp(QMainWindow):
             self.ax_native.legend()
             self.ax_native.grid(True)
             
-            # Set x limits to max selectable end
-            self.ax_native.set_xlim(0, max_end)
+            # Set x limits to zoomed loop or full
+            if self.zoomed and self._loop_end is not None and (self._loop_start > 0.0 or self._loop_end < max_end):
+                self.ax_native.set_xlim(self._loop_start, self._loop_end)
+            else:
+                self.ax_native.set_xlim(0, max_end)
             
             # Always draw the playback position line (red)
             playback_time = 0.0
@@ -532,6 +562,42 @@ class PitchAccentApp(QMainWindow):
                 video_container_layout.insertWidget(0, self.video_widget)
                 self.vlc_player = self.vlc_instance.media_player_new()
                 self.vlc_player.set_hwnd(int(self.video_widget.winId()))
+                
+                # Set audio output device and volume
+                device_id = self.output_devices[self.output_selector.currentIndex()]['index']
+                device_name = self.output_devices[self.output_selector.currentIndex()]['name']
+                print(f"[DEBUG] Setting VLC audio output device to: {device_name} (ID: {device_id})")
+                
+                # Set audio device using platform-specific method
+                if sys.platform == 'win32':
+                    # Windows: Try both DirectSound and WASAPI
+                    try:
+                        self.vlc_player.audio_output_device_set('directsound', f"ds_device_{device_id}")
+                    except Exception:
+                        try:
+                            self.vlc_player.audio_output_device_set('mmdevice', device_name)
+                        except Exception:
+                            print("[DEBUG] Could not set specific audio device, using default")
+                elif sys.platform == 'darwin':
+                    # macOS: Use CoreAudio
+                    try:
+                        self.vlc_player.audio_output_device_set('auhal', device_name)
+                    except Exception:
+                        print("[DEBUG] Could not set specific audio device, using default")
+                elif sys.platform.startswith('linux'):
+                    # Linux: Use ALSA or PulseAudio
+                    try:
+                        self.vlc_player.audio_output_device_set('alsa', device_name)
+                    except Exception:
+                        try:
+                            self.vlc_player.audio_output_device_set('pulse', device_name)
+                        except Exception:
+                            print("[DEBUG] Could not set specific audio device, using default")
+                
+                # Ensure volume is not muted and set to a reasonable level
+                self.vlc_player.audio_set_mute(False)
+                self.vlc_player.audio_set_volume(100)
+                
                 # Re-attach poll timer and event
                 self.vlc_poll_timer.timeout.disconnect()
                 self.vlc_poll_timer.timeout.connect(self.poll_vlc_state_and_overlay)
@@ -791,7 +857,7 @@ class PitchAccentApp(QMainWindow):
         try:
             try:
                 # Get selected input device
-                device_id = self.input_selector.currentIndex()
+                device_id = self.input_devices[self.input_selector.currentIndex()]['index']
                 print(f"[DEBUG] Using input device index: {device_id}")
                 # Start recording
                 recording = sd.rec(
@@ -925,7 +991,9 @@ class PitchAccentApp(QMainWindow):
             if len(nonzero) > 0:
                 last = nonzero[-1] + 1
                 audio_data = audio_data[:last]
-            sd.play(audio_data, sample_rate)
+            # Get selected output device
+            device_id = self.output_devices[self.output_selector.currentIndex()]['index']
+            sd.play(audio_data, sample_rate, device=device_id)
             sd.wait()
             self.user_playing = False
         except Exception as e:
@@ -1009,8 +1077,10 @@ class PitchAccentApp(QMainWindow):
             if len(nonzero) > 0:
                 last = nonzero[-1] + 1
                 audio_data = audio_data[:last]
+            # Get selected output device
+            device_id = self.output_devices[self.output_selector.currentIndex()]['index']
             while self.user_playing:
-                sd.play(audio_data, sample_rate)
+                sd.play(audio_data, sample_rate, device=device_id)
                 sd.wait()
         except Exception as e:
             print(f"Error during loop playback: {e}")
@@ -1069,6 +1139,9 @@ class PitchAccentApp(QMainWindow):
             self._loop_start = 0.0
             self._loop_end = max_end
             self.update_loop_info()
+            self.zoom_btn.setEnabled(False)
+            self.zoomed = False
+            self.zoom_btn.setChecked(False)
             # Remove selection patch if present
             if hasattr(self, 'selection_patch') and self.selection_patch is not None:
                 try:
@@ -1145,7 +1218,7 @@ class PitchAccentApp(QMainWindow):
 
     def setup_shortcuts(self):
         # Remove old shortcuts if they exist (delete QShortcut objects)
-        for attr in ["play_pause_sc", "clear_loop_sc", "loop_checkbox_sc", "record_sc", "play_user_sc", "loop_user_sc", "stop_user_sc"]:
+        for attr in ["play_pause_sc", "clear_loop_sc", "loop_checkbox_sc", "record_sc", "play_user_sc", "loop_user_sc", "stop_user_sc", "zoom_sc"]:
             if hasattr(self, attr):
                 old = getattr(self, attr)
                 old.setParent(None)
@@ -1171,6 +1244,9 @@ class PitchAccentApp(QMainWindow):
         # Stop User
         self.stop_user_sc = QShortcut(QKeySequence(self.shortcuts["stop_user"]), self)
         self.stop_user_sc.activated.connect(self.stop_user)
+        # Zoom
+        self.zoom_sc = QShortcut(QKeySequence(self.shortcuts["zoom"]), self)
+        self.zoom_sc.activated.connect(lambda: self.zoom_btn.toggle() if self.zoom_btn.isEnabled() else None)
 
     def load_shortcuts(self):
         try:
@@ -1224,6 +1300,7 @@ class PitchAccentApp(QMainWindow):
             ("Play User", "play_user"),
             ("Loop User", "loop_user"),
             ("Stop User", "stop_user"),
+            ("Zoom", "zoom"),
         ]
         for label, key in shortcut_map:
             edit = QKeySequenceEdit(QKeySequence(self.shortcuts[key]))
@@ -1246,6 +1323,68 @@ class PitchAccentApp(QMainWindow):
 
     def keyPressEvent(self, event):
         super().keyPressEvent(event)
+
+    def toggle_zoom(self, checked):
+        self.zoomed = checked
+        self.redraw_waveform()
+
+    def on_input_device_changed(self, index):
+        """Handle input device selection change"""
+        if index >= 0 and index < len(self.input_devices):
+            device_id = self.input_devices[index]['index']
+            print(f"Input device changed to: {self.input_devices[index]['name']} (ID: {device_id})")
+
+    def on_output_device_changed(self, index):
+        """Handle output device selection change"""
+        if index >= 0 and index < len(self.output_devices):
+            device_id = self.output_devices[index]['index']
+            device_name = self.output_devices[index]['name']
+            print(f"Output device changed to: {device_name} (ID: {device_id})")
+            # Update VLC audio output device
+            if hasattr(self, 'vlc_player'):
+                try:
+                    # Stop playback before changing device
+                    was_playing = self.vlc_player.get_state() == vlc.State.Playing
+                    if was_playing:
+                        self.vlc_player.pause()
+                    
+                    # Set audio device using platform-specific method
+                    if sys.platform == 'win32':
+                        # Windows: Try both DirectSound and WASAPI
+                        try:
+                            self.vlc_player.audio_output_device_set('directsound', f"ds_device_{device_id}")
+                        except Exception:
+                            try:
+                                self.vlc_player.audio_output_device_set('mmdevice', device_name)
+                            except Exception:
+                                print("[DEBUG] Could not set specific audio device, using default")
+                    elif sys.platform == 'darwin':
+                        # macOS: Use CoreAudio
+                        try:
+                            self.vlc_player.audio_output_device_set('auhal', device_name)
+                        except Exception:
+                            print("[DEBUG] Could not set specific audio device, using default")
+                    elif sys.platform.startswith('linux'):
+                        # Linux: Use ALSA or PulseAudio
+                        try:
+                            self.vlc_player.audio_output_device_set('alsa', device_name)
+                        except Exception:
+                            try:
+                                self.vlc_player.audio_output_device_set('pulse', device_name)
+                            except Exception:
+                                print("[DEBUG] Could not set specific audio device, using default")
+                    
+                    # Ensure volume is not muted and set to a reasonable level
+                    self.vlc_player.audio_set_mute(False)
+                    self.vlc_player.audio_set_volume(100)
+                    
+                    print(f"[DEBUG] Set VLC audio output device to: {device_name} (ID: {device_id})")
+                    
+                    # Resume playback if it was playing
+                    if was_playing:
+                        self.vlc_player.play()
+                except Exception as e:
+                    print(f"[DEBUG] Error setting VLC audio device: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
