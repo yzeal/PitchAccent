@@ -90,12 +90,15 @@ class PitchAccentApp(QMainWindow):
         self.selection_patch = None
         self._loop_start = 0.0
         self._loop_end = None
+        self._clip_duration = 0.0  # Will be set when loading file
+        self._default_selection_margin = 0.3  # 300ms margin from actual end
         self.user_playing = False
         self.show_video = True
         self.max_recording_time = 10  # seconds
         self.smoothing = 0
-        self.current_rotation = 0  # Initialize rotation to 0 degrees
-        self.original_frame = None  # Initialize original_frame to None
+        self.current_rotation = 0
+        self.original_frame = None
+        self._is_looping = False
         
         # Get audio devices
         self.input_devices = [d for d in sd.query_devices() if d['max_input_channels'] > 0]
@@ -169,11 +172,12 @@ class PitchAccentApp(QMainWindow):
         video_buttons = QHBoxLayout()
         self.play_pause_btn = QPushButton("Play")
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
-        self.stop_btn = QPushButton("Stop")
+        self.stop_btn = QPushButton("Reset")
         self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self.stop_native)
         self.loop_checkbox = QCheckBox("Loop")
-        self.loop_checkbox.setChecked(False)
+        self.loop_checkbox.setChecked(True)
+        self._is_looping = True
+        self.loop_checkbox.stateChanged.connect(self.on_loop_changed)
         video_buttons.addWidget(self.play_pause_btn)
         video_buttons.addWidget(self.stop_btn)
         video_buttons.addWidget(self.loop_checkbox)
@@ -345,8 +349,14 @@ class PitchAccentApp(QMainWindow):
     def on_select(self, xmin, xmax):
         """Handle span selection for loop points"""
         with self.selection_lock:
+            # Snap to start/end if close
+            if xmin < 0.1:  # Snap to start if within 100ms
+                xmin = 0.0
+            max_end = self._clip_duration - self._default_selection_margin - 0.05
+            if xmax > max_end:
+                xmax = max_end
             self._loop_start = max(0.0, xmin)
-            self._loop_end = xmax
+            self._loop_end = min(max_end, xmax)
             self.update_loop_info()
             self.redraw_waveform()
 
@@ -361,6 +371,7 @@ class PitchAccentApp(QMainWindow):
         """Redraw the native and user pitch curves with current loop selection"""
         # Safely stop playback timers and remove playback lines before redrawing
         self._cleanup_playback_lines()
+        
         # Native pitch
         self.ax_native.clear()
         if hasattr(self, 'native_times') and hasattr(self, 'native_pitch') and hasattr(self, 'native_voiced'):
@@ -387,8 +398,21 @@ class PitchAccentApp(QMainWindow):
                             self.ax_native.plot(
                                 seg_x, seg_y, color='blue', linewidth=6, solid_capstyle='round', label='Native' if start == 0 else "")
                     start = None
+            
+            # Draw selection overlay
             if self._loop_end is not None:
-                self.ax_native.axvspan(self._loop_start, self._loop_end, color='blue', alpha=0.2)
+                # Draw selection area
+                self.ax_native.axvspan(self._loop_start, self._loop_end, color='blue', alpha=0.1)
+                # Draw selection boundaries
+                self.ax_native.axvline(self._loop_start, color='blue', linestyle='-', linewidth=2)
+                self.ax_native.axvline(self._loop_end, color='blue', linestyle='-', linewidth=2)
+                # Draw outside selection area with darker overlay
+                if self._loop_start > 0:
+                    self.ax_native.axvspan(0, self._loop_start, color='gray', alpha=0.3)
+                max_end = self._clip_duration - self._default_selection_margin - 0.05
+                if self._loop_end < max_end:
+                    self.ax_native.axvspan(self._loop_end, max_end, color='gray', alpha=0.3)
+            
             self.ax_native.set_ylabel('Hz')
             self.ax_native.set_title('Native Speaker (Raw Pitch)')
             if hasattr(self, 'native_pitch') and np.any(self.native_voiced):
@@ -398,6 +422,10 @@ class PitchAccentApp(QMainWindow):
                 self.ax_native.set_ylim(0, 500)
             self.ax_native.legend()
             self.ax_native.grid(True)
+            
+            # Set x limits to max selectable end
+            self.ax_native.set_xlim(0, max_end)
+        
         # User pitch
         self.ax_user.clear()
         if hasattr(self, 'user_times') and hasattr(self, 'user_pitch') and hasattr(self, 'user_voiced'):
@@ -487,10 +515,11 @@ class PitchAccentApp(QMainWindow):
             self.video_path = file_path
             self.process_audio()
             
-            # Enable controls
+            # Enable controls and show first frame
             self.play_pause_btn.setEnabled(True)
             self.loop_checkbox.setEnabled(True)
             self.record_btn.setEnabled(True)
+            self.show_first_frame()
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
@@ -507,10 +536,17 @@ class PitchAccentApp(QMainWindow):
         self.native_times = pitch_times
         self.native_pitch = pitch_values
         self.native_voiced = voiced
+        
+        # Set clip duration and initialize default selection
+        self._clip_duration = pitch_times[-1]
+        max_end = self._clip_duration - self._default_selection_margin - 0.05
+        self._loop_start = 0.0
+        self._loop_end = max_end
+        
         self.redraw_waveform()
 
     def toggle_play_pause(self):
-        """Simple play/pause toggle"""
+        """Handle play/pause button click"""
         if self._play_pause_debounce:
             return
         self._play_pause_debounce = True
@@ -520,23 +556,19 @@ class PitchAccentApp(QMainWindow):
         if state in [vlc.State.Playing, vlc.State.Buffering]:
             self.vlc_player.pause()
             self.play_pause_btn.setText("Play")
+            self.vlc_poll_timer.stop()
         else:
-            # Always ensure we're at the start if stopped or ended
-            if state in [vlc.State.Ended, vlc.State.Stopped]:
-                self.vlc_player.stop()
-                self.vlc_player.set_time(0)
-                # Small delay to ensure VLC is ready
-                QTimer.singleShot(50, lambda: (
-                    self.vlc_player.play(),
-                    self.play_pause_btn.setText("Pause"),
-                    self.stop_btn.setEnabled(True),
-                    self.vlc_poll_timer.start()
-                ))
+            # Try to nudge the position slightly before playing
+            current_time = self.vlc_player.get_time() / 1000.0
+            if current_time < self._loop_start or current_time >= self._loop_end:
+                self.vlc_player.set_time(int(self._loop_start * 1000))
             else:
-                self.vlc_player.play()
-                self.play_pause_btn.setText("Pause")
-                self.stop_btn.setEnabled(True)
-                self.vlc_poll_timer.start()
+                # Nudge by 10ms to force decoder refresh
+                self.vlc_player.set_time(int((current_time + 0.01) * 1000))
+            self.vlc_player.play()
+            self.play_pause_btn.setText("Pause")
+            self.stop_btn.setEnabled(True)
+            self.vlc_poll_timer.start()
             
         QTimer.singleShot(200, self._reset_play_pause_debounce)
 
@@ -544,17 +576,27 @@ class PitchAccentApp(QMainWindow):
         self._play_pause_debounce = False
 
     def poll_vlc_state_and_overlay(self):
-        """Update UI based on VLC state"""
+        """Update UI based on VLC state and handle overlay"""
         state = self.vlc_player.get_state()
         
         # Update Play/Pause button label
         if state in [vlc.State.Playing, vlc.State.Buffering]:
             self.play_pause_btn.setText("Pause")
-        elif state in [vlc.State.Ended, vlc.State.Stopped]:
+            self.stop_btn.setEnabled(True)
+            
+            # Check if we've reached the end of selection
+            current_time = self.vlc_player.get_time() / 1000.0
+            if current_time >= self._loop_end:
+                # Reset to start of selection
+                self.vlc_player.set_time(int(self._loop_start * 1000))
+                if not self._is_looping:
+                    self.vlc_player.pause()
+                    self.play_pause_btn.setText("Play")
+                    self.stop_btn.setEnabled(False)
+                    self.vlc_poll_timer.stop()
+        elif state == vlc.State.Paused:
             self.play_pause_btn.setText("Play")
             self.stop_btn.setEnabled(False)
-            if state == vlc.State.Ended:
-                self.vlc_player.set_time(0)
         
         # Update overlay
         ms = self.vlc_player.get_time()
@@ -565,27 +607,19 @@ class PitchAccentApp(QMainWindow):
             else:
                 self.native_playback_line.set_xdata([t, t])
             self.canvas.draw_idle()
-        
-        # If stopped, clean up overlay and timer
-        if state == vlc.State.Stopped:
-            self.vlc_poll_timer.stop()
-            self.update_native_playback_overlay(reset=True)
 
     def stop_native(self):
-        """Stop playback and reset to first frame"""
-        self.vlc_player.stop()
-        self.vlc_player.set_time(0)
+        """Reset to start (or loop start) and pause"""
+        start_time = self._loop_start if self._loop_end is not None else 0
+        self.vlc_player.set_time(int(start_time * 1000))
+        self.vlc_player.pause()
         self.play_pause_btn.setText("Play")
         self.stop_btn.setEnabled(False)
         self.vlc_poll_timer.stop()
         self.update_native_playback_overlay(reset=True)
-        self.show_first_frame_after_stop()
 
-    def show_first_frame_after_stop(self):
-        """Show first frame after stopping"""
-        # Ensure we're at the start
-        self.vlc_player.set_time(0)
-        # Brief play/pause to show first frame
+    def show_first_frame(self):
+        """Show first frame of video"""
         self.vlc_player.play()
         QTimer.singleShot(50, lambda: (
             self.vlc_player.pause(),
@@ -595,25 +629,24 @@ class PitchAccentApp(QMainWindow):
     def on_vlc_end_reached(self, event):
         """Handle end of media"""
         def handle_end():
-            # Always stop and reset position
-            self.vlc_player.stop()
-            self.vlc_player.set_time(0)
-            self.vlc_poll_timer.stop()
-            self.update_native_playback_overlay(reset=True)
+            # Reset to appropriate start position
+            start_time = self._loop_start if self._loop_end is not None else 0
+            self.vlc_player.set_time(int(start_time * 1000))
             
-            if self.loop_checkbox.isChecked():
-                # If looping, restart after a short delay
-                QTimer.singleShot(100, lambda: (
-                    self.vlc_player.play(),
-                    self.vlc_poll_timer.start(),
-                    self.play_pause_btn.setText("Pause"),
-                    self.stop_btn.setEnabled(True)
-                ))
+            if self._is_looping:
+                # Continue playing if looping is enabled
+                self.vlc_player.play()
+                self.play_pause_btn.setText("Pause")
+                self.stop_btn.setEnabled(True)
+                self.vlc_poll_timer.start()
             else:
-                # If not looping, just show first frame and enable play
+                # Pause if not looping
+                self.vlc_player.pause()
                 self.play_pause_btn.setText("Play")
                 self.stop_btn.setEnabled(False)
-                self.show_first_frame_after_stop()
+                self.vlc_poll_timer.stop()
+            
+            self.update_native_playback_overlay(reset=True)
                 
         QTimer.singleShot(0, handle_end)
 
@@ -937,25 +970,13 @@ class PitchAccentApp(QMainWindow):
                 break
 
     def clear_selection(self):
+        """Reset selection to default (full clip with margin)"""
         with self.selection_lock:
+            max_end = self._clip_duration - self._default_selection_margin - 0.05
             self._loop_start = 0.0
-            self._loop_end = None
+            self._loop_end = max_end
             self.update_loop_info()
-            # Remove selection patch if present
-            if hasattr(self, 'selection_patch') and self.selection_patch is not None:
-                try:
-                    self.selection_patch.remove()
-                except Exception:
-                    pass
-                self.selection_patch = None
-            # Clear the span selector (removes selection rectangle)
-            if hasattr(self, 'span') and self.span is not None:
-                try:
-                    self.span.clear()
-                except Exception:
-                    pass
             self.redraw_waveform()
-            self.canvas.draw_idle()
 
     def _cleanup_playback_lines(self):
         # Stop user playback timer and remove line
@@ -1010,6 +1031,10 @@ class PitchAccentApp(QMainWindow):
             print(f"Error in resize_video_display: {e}")
             import traceback
             traceback.print_exc()
+
+    def on_loop_changed(self, state):
+        """Handle loop checkbox state change"""
+        self._is_looping = state == Qt.CheckState.Checked.value
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
