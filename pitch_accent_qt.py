@@ -1595,7 +1595,7 @@ class PitchAccentApp(QMainWindow):
                     del self._temp_line
                 del self._selection_start
         elif event.button() == Qt.MouseButton.RightButton and hasattr(self, '_selection_start'):
-            # Abort selection in progress
+            # Abort selection in progress 
             if hasattr(self, '_temp_line'):
                 self.pg_plot.removeItem(self._temp_line)
                 del self._temp_line
