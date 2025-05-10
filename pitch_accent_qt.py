@@ -292,13 +292,6 @@ class PitchAccentApp(QMainWindow):
         self.clear_loop_btn.clicked.connect(self.clear_selection)
         controls_layout.addWidget(self.clear_loop_btn)
 
-        # Zoom button
-        self.zoom_btn = QPushButton("Zoom")
-        self.zoom_btn.setCheckable(True)
-        self.zoom_btn.setEnabled(False)
-        self.zoom_btn.toggled.connect(self.toggle_zoom)
-        controls_layout.addWidget(self.zoom_btn)
-
         # Spacer
         controls_layout.addSpacing(20)
 
@@ -434,8 +427,7 @@ class PitchAccentApp(QMainWindow):
             "record": "R",
             "play_user": "E",
             "loop_user": "W",
-            "stop_user": "Q",
-            "zoom": "Z"
+            "stop_user": "Q"
         }
         self.shortcuts = self.load_shortcuts()
         self.setup_shortcuts()
@@ -480,13 +472,6 @@ class PitchAccentApp(QMainWindow):
             self._loop_start = max(0.0, xmin)
             self._loop_end = min(max_end, xmax)
             self.update_loop_info()
-            # Enable zoom if a loop is selected (not full clip)
-            if self._loop_start > 0.0 or self._loop_end < max_end:
-                self.zoom_btn.setEnabled(True)
-            else:
-                self.zoom_btn.setEnabled(False)
-                self.zoomed = False
-                self.zoom_btn.setChecked(False)
             self.redraw_waveform()
 
     def update_loop_info(self):
@@ -1312,9 +1297,6 @@ class PitchAccentApp(QMainWindow):
             self._loop_start = 0.0
             self._loop_end = max_end
             self.update_loop_info()
-            self.zoom_btn.setEnabled(False)
-            self.zoomed = False
-            self.zoom_btn.setChecked(False)
             # Remove selection patch if present
             if hasattr(self, 'selection_patch') and self.selection_patch is not None:
                 try:
@@ -1332,7 +1314,6 @@ class PitchAccentApp(QMainWindow):
             if hasattr(self, 'pg_region'):
                 self.pg_region.setRegion([0.0, max_end])
             self.redraw_waveform()
-            # self.canvas.draw_idle()
 
     def _cleanup_playback_lines(self):
         # Stop user playback timer and remove line
@@ -1392,7 +1373,7 @@ class PitchAccentApp(QMainWindow):
 
     def setup_shortcuts(self):
         # Remove old shortcuts if they exist (delete QShortcut objects)
-        for attr in ["play_pause_sc", "clear_loop_sc", "loop_checkbox_sc", "record_sc", "play_user_sc", "loop_user_sc", "stop_user_sc", "zoom_sc"]:
+        for attr in ["play_pause_sc", "clear_loop_sc", "loop_checkbox_sc", "record_sc", "play_user_sc", "loop_user_sc", "stop_user_sc"]:
             if hasattr(self, attr):
                 old = getattr(self, attr)
                 old.setParent(None)
@@ -1418,9 +1399,6 @@ class PitchAccentApp(QMainWindow):
         # Stop User
         self.stop_user_sc = QShortcut(QKeySequence(self.shortcuts["stop_user"]), self)
         self.stop_user_sc.activated.connect(self.stop_user)
-        # Zoom
-        self.zoom_sc = QShortcut(QKeySequence(self.shortcuts["zoom"]), self)
-        self.zoom_sc.activated.connect(lambda: self.zoom_btn.toggle() if self.zoom_btn.isEnabled() else None)
 
     def load_shortcuts(self):
         try:
@@ -1474,7 +1452,6 @@ class PitchAccentApp(QMainWindow):
             ("Play User", "play_user"),
             ("Loop User", "loop_user"),
             ("Stop User", "stop_user"),
-            ("Zoom", "zoom"),
         ]
         for label, key in shortcut_map:
             edit = QKeySequenceEdit(QKeySequence(self.shortcuts[key]))
@@ -1497,81 +1474,6 @@ class PitchAccentApp(QMainWindow):
 
     def keyPressEvent(self, event):
         super().keyPressEvent(event)
-
-    def toggle_zoom(self, checked):
-        self.zoomed = checked
-        self.redraw_waveform()
-
-    def on_input_device_changed(self, index):
-        """Handle input device selection change"""
-        if index >= 0 and index < len(self.input_devices):
-            device_id = self.input_devices[index]['index']
-            print(f"Input device changed to: {self.input_devices[index]['name']} (ID: {device_id})")
-
-    def on_output_device_changed(self, index):
-        """Handle output device selection change"""
-        if index >= 0 and index < len(self.output_devices):
-            device_id = self.output_devices[index]['index']
-            device_name = self.output_devices[index]['name']
-            print(f"Output device changed to: {device_name} (ID: {device_id})")
-            # Update VLC audio output device
-            if hasattr(self, 'vlc_player'):
-                try:
-                    # Stop playback before changing device
-                    was_playing = self.vlc_player.get_state() == vlc.State.Playing
-                    if was_playing:
-                        self.vlc_player.pause()
-                    
-                    # Set audio device using platform-specific method
-                    if sys.platform == 'win32':
-                        # Windows: Try both DirectSound and WASAPI
-                        try:
-                            self.vlc_player.audio_output_device_set('directsound', f"ds_device_{device_id}")
-                        except Exception:
-                            try:
-                                self.vlc_player.audio_output_device_set('mmdevice', device_name)
-                            except Exception:
-                                print("[DEBUG] Could not set specific audio device, using default")
-                    elif sys.platform == 'darwin':
-                        # macOS: Use CoreAudio
-                        try:
-                            self.vlc_player.audio_output_device_set('auhal', device_name)
-                        except Exception:
-                            print("[DEBUG] Could not set specific audio device, using default")
-                    elif sys.platform.startswith('linux'):
-                        # Linux: Use ALSA or PulseAudio
-                        try:
-                            self.vlc_player.audio_output_device_set('alsa', device_name)
-                        except Exception:
-                            try:
-                                self.vlc_player.audio_output_device_set('pulse', device_name)
-                            except Exception:
-                                print("[DEBUG] Could not set specific audio device, using default")
-                
-                    # Ensure volume is not muted and set to a reasonable level
-                    self.vlc_player.audio_set_mute(False)
-                    self.vlc_player.audio_set_volume(100)
-                    
-                    
-                    # Resume playback if it was playing
-                    if was_playing:
-                        self.vlc_player.play()
-                except Exception as e:
-                    print(f"[DEBUG] Error setting VLC audio device: {e}")
-
-    """def _get_axes_bbox(self, ax):
-        # Get the renderer from the canvas
-        try:
-            renderer = self.canvas.renderer
-        except AttributeError:
-            renderer = self.canvas.figure.canvas.get_renderer()
-        bbox = ax.get_window_extent(renderer)
-        dpr = getattr(self.canvas, 'devicePixelRatioF', lambda: 1.0)()
-        left = int(bbox.x0 / dpr)
-        top = int(bbox.y0 / dpr) - 21  # Apply a small negative offset
-        width = int((bbox.x1 - bbox.x0) / dpr)
-        height = int((bbox.y1 - bbox.y0) / dpr)
-        return QRect(left, top, width, height)"""
 
     def on_mouse_clicked(self, event):
         """Handle mouse clicks for drawing selection"""
@@ -1617,7 +1519,7 @@ class PitchAccentApp(QMainWindow):
                     del self._temp_line
                 del self._selection_start
         elif event.button() == Qt.MouseButton.RightButton and hasattr(self, '_selection_start'):
-            # Abort selection in progress 
+            # Abort selection in progress
             if hasattr(self, '_temp_line'):
                 self.pg_plot.removeItem(self._temp_line)
                 del self._temp_line
@@ -1635,13 +1537,12 @@ class PitchAccentApp(QMainWindow):
             self.pg_region.setRegion([start, end])
         self._loop_start, self._loop_end = start, end
         self.update_loop_info()
-        # Enable zoom if a loop is selected (not full clip)
-        if self._loop_start > 0.0 or self._loop_end < max_end:
-            self.zoom_btn.setEnabled(True)
-        else:
-            self.zoom_btn.setEnabled(False)
-            self.zoomed = False
-            self.zoom_btn.setChecked(False)
+
+    def on_input_device_changed(self, index):
+        """Handle input device selection change"""
+        if index >= 0 and index < len(self.input_devices):
+            device_id = self.input_devices[index]['index']
+            print(f"Input device changed to: {self.input_devices[index]['name']} (ID: {device_id})")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
