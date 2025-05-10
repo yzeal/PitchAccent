@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider, QDialog, QFormLayout, QDialogButtonBox, QKeySequenceEdit
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl
-from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut
+from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut, QIntValidator
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -100,6 +100,7 @@ class PitchAccentApp(QMainWindow):
         self.original_frame = None
         self._is_looping = False
         self.zoomed = False
+        self._loop_delay_timer = None
         
         # Get audio devices
         self.input_devices = [d for d in sd.query_devices() if d['max_input_channels'] > 0]
@@ -196,9 +197,21 @@ class PitchAccentApp(QMainWindow):
         self.loop_checkbox.setChecked(True)
         self._is_looping = True
         self.loop_checkbox.stateChanged.connect(self.on_loop_changed)
+
+        # Loop delay input
+        loop_delay_label = QLabel("Loop Delay:")
+        self.loop_delay_input = QLineEdit("0")
+        self.loop_delay_input.setFixedWidth(50)
+        self.loop_delay_input.setValidator(QIntValidator(0, 800, self))
+        self.loop_delay_input.setToolTip("Delay in milliseconds before repeating the loop (0-800 ms)")
+        loop_delay_ms_label = QLabel("ms")
+
         video_buttons.addWidget(self.play_pause_btn)
         video_buttons.addWidget(self.stop_btn)
         video_buttons.addWidget(self.loop_checkbox)
+        video_buttons.addWidget(loop_delay_label)
+        video_buttons.addWidget(self.loop_delay_input)
+        video_buttons.addWidget(loop_delay_ms_label)
         video_buttons.addStretch()
         
         video_container_layout.addWidget(self.video_widget)
@@ -704,12 +717,14 @@ class PitchAccentApp(QMainWindow):
 
     def toggle_play_pause(self):
         """Handle play/pause button click"""
+        # Cancel any pending loop delay
+        if hasattr(self, '_loop_delay_timer') and self._loop_delay_timer is not None:
+            self._loop_delay_timer.stop()
+            self._loop_delay_timer = None
         if self._play_pause_debounce:
             return
         self._play_pause_debounce = True
-        
         state = self.vlc_player.get_state()
-        
         if state in [vlc.State.Playing, vlc.State.Buffering]:
             self.vlc_player.pause()
             self.play_pause_btn.setText("Play")
@@ -726,7 +741,6 @@ class PitchAccentApp(QMainWindow):
             self.play_pause_btn.setText("Pause")
             self.stop_btn.setEnabled(True)
             self.vlc_poll_timer.start()
-            
         QTimer.singleShot(200, self._reset_play_pause_debounce)
 
     def _reset_play_pause_debounce(self):
@@ -735,26 +749,44 @@ class PitchAccentApp(QMainWindow):
     def poll_vlc_state_and_overlay(self):
         """Update UI based on VLC state and handle overlay"""
         state = self.vlc_player.get_state()
-        
         # Update Play/Pause button label
         if state in [vlc.State.Playing, vlc.State.Buffering]:
             self.play_pause_btn.setText("Pause")
             self.stop_btn.setEnabled(True)
-            
             # Check if we've reached the end of selection
             current_time = self.vlc_player.get_time() / 1000.0
             if current_time >= self._loop_end:
-                # Reset to start of selection
-                self.vlc_player.set_time(int(self._loop_start * 1000))
-                if not self._is_looping:
+                try:
+                    delay_val = int(self.loop_delay_input.text())
+                    if delay_val < 0 or delay_val > 800:
+                        delay_val = 0
+                except Exception:
+                    delay_val = 0
+                if self._is_looping and delay_val > 0:
                     self.vlc_player.pause()
-                    self.play_pause_btn.setText("Play")
-                    self.stop_btn.setEnabled(False)
-                    self.vlc_poll_timer.stop()
+                    self.vlc_poll_timer.stop()  # Ensure timer is stopped immediately
+                    # Cancel any previous timer
+                    if self._loop_delay_timer is not None:
+                        self._loop_delay_timer.stop()
+                        self._loop_delay_timer = None
+                    self._loop_delay_timer = QTimer(self)
+                    self._loop_delay_timer.setSingleShot(True)
+                    def restart_if_still_looping():
+                        self._loop_delay_timer = None
+                        if self._is_looping:
+                            self._restart_loop(self._loop_start, delay_val)
+                    self._loop_delay_timer.timeout.connect(restart_if_still_looping)
+                    self._loop_delay_timer.start(delay_val)
+                else:
+                    self.vlc_player.set_time(int(self._loop_start * 1000))
+                    if not self._is_looping:
+                        self.vlc_player.pause()
+                        self.play_pause_btn.setText("Play")
+                        self.stop_btn.setEnabled(False)
+                        self.vlc_poll_timer.stop()
         elif state == vlc.State.Paused:
             self.play_pause_btn.setText("Play")
             self.stop_btn.setEnabled(False)
-        
         # Update overlay
         ms = self.vlc_player.get_time()
         max_end = self._clip_duration - self._default_selection_margin - 0.05
@@ -770,6 +802,10 @@ class PitchAccentApp(QMainWindow):
 
     def stop_native(self):
         """Reset to start (or loop start) and pause"""
+        # Cancel any pending loop delay
+        if hasattr(self, '_loop_delay_timer') and self._loop_delay_timer is not None:
+            self._loop_delay_timer.stop()
+            self._loop_delay_timer = None
         start_time = self._loop_start if self._loop_end is not None else 0
         self.vlc_player.set_time(int(start_time * 1000))
         self.vlc_player.pause()
@@ -789,26 +825,52 @@ class PitchAccentApp(QMainWindow):
     def on_vlc_end_reached(self, event):
         """Handle end of media"""
         def handle_end():
-            # Reset to appropriate start position
             start_time = self._loop_start if self._loop_end is not None else 0
-            self.vlc_player.set_time(int(start_time * 1000))
-            
-            if self._is_looping:
-                # Continue playing if looping is enabled
-                self.vlc_player.play()
-                self.play_pause_btn.setText("Pause")
-                self.stop_btn.setEnabled(True)
-                self.vlc_poll_timer.start()
-            else:
-                # Pause if not looping
+            # Always get the latest value from the input field
+            try:
+                delay_val = int(self.loop_delay_input.text())
+                print("[DEBUG] loop delay value: ", delay_val)
+                if delay_val < 0 or delay_val > 800:
+                    delay_val = 0
+            except Exception:
+                delay_val = 0
+                print("[DEBUG] Could notread loop delay")
+            if self._is_looping and delay_val > 0:
                 self.vlc_player.pause()
-                self.play_pause_btn.setText("Play")
-                self.stop_btn.setEnabled(False)
                 self.vlc_poll_timer.stop()
-            
+                QTimer.singleShot(delay_val, lambda: self._restart_loop(start_time, delay_val))
+            else:
+                self.vlc_player.set_time(int(start_time * 1000))
+                if self._is_looping:
+                    self.vlc_player.play()
+                    self.play_pause_btn.setText("Pause")
+                    self.stop_btn.setEnabled(True)
+                    self.vlc_poll_timer.start()
+                else:
+                    self.vlc_player.pause()
+                    self.play_pause_btn.setText("Play")
+                    self.stop_btn.setEnabled(False)
             self.update_native_playback_overlay(reset=True)
-                
         QTimer.singleShot(0, handle_end)
+
+    def _restart_loop(self, start_time, user_delay_ms=0):
+        print(f"[DEBUG] _restart_loop: user_delay_ms={user_delay_ms}, start_time={start_time}")
+        print(f"[DEBUG] Loop segment: start={self._loop_start}, end={self._loop_end}")
+        self.vlc_player.set_time(int(start_time * 1000))
+        print(f"[DEBUG] _restart_loop: called set_time({int(start_time * 1000)})")
+        seek_wait = 150  # ms, a bit longer to ensure VLC is ready
+        print(f"[DEBUG] _restart_loop: scheduling _actually_play_after_seek in {seek_wait} ms")
+        QTimer.singleShot(seek_wait, self._actually_play_after_seek)
+
+    def _actually_play_after_seek(self):
+        actual_time = self.vlc_player.get_time() / 1000.0
+        print(f"[DEBUG] _actually_play_after_seek: actual VLC time before play: {actual_time}")
+        self.vlc_player.play()
+        print(f"[DEBUG] _actually_play_after_seek: called play()")
+        self.play_pause_btn.setText("Pause")
+        self.stop_btn.setEnabled(True)
+        self.vlc_poll_timer.start()
+        print(f"[DEBUG] _actually_play_after_seek: restarted poll timer")
 
     def update_native_playback_overlay(self, reset=False):
         if reset:
