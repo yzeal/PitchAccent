@@ -1011,9 +1011,10 @@ class PitchAccentApp(QMainWindow):
                     print(f"[DEBUG] Exception during wavfile.write: {e}")
                     from PyQt6.QtWidgets import QMessageBox
                     QMessageBox.critical(self, "Error", f"Exception during saving recording: {e}")
-                self.process_user_audio()
-                self.play_user_btn.setEnabled(True)
-                self.loop_user_btn.setEnabled(True)
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self.process_user_audio)
+                QTimer.singleShot(0, lambda: self.play_user_btn.setEnabled(True))
+                QTimer.singleShot(0, lambda: self.loop_user_btn.setEnabled(True))
             except Exception as thread_inner_e:
                 print(f"[DEBUG] Exception in _record_thread inner block: {thread_inner_e}")
                 from PyQt6.QtWidgets import QMessageBox
@@ -1041,7 +1042,7 @@ class PitchAccentApp(QMainWindow):
         self.loop_user_btn.setEnabled(False)
         self.stop_user_btn.setEnabled(True)
         # Start playback with timer for moving line
-        self.start_user_playback_with_timer()
+        QTimer.singleShot(0, self.start_user_playback_with_timer)
 
     def start_user_playback_with_timer(self):
         import time
@@ -1125,6 +1126,13 @@ class PitchAccentApp(QMainWindow):
             duration = len(audio_data) / sample_rate
         except Exception:
             duration = 0
+        QTimer.singleShot(0, lambda: self._start_user_loop_playback_timer(duration))
+        # Start loop playback in a background thread
+        import threading
+        threading.Thread(target=self._loop_user_thread, daemon=True).start()
+
+    def _start_user_loop_playback_timer(self, duration):
+        from PyQt6.QtCore import QTimer
         self.user_playback_timer = QTimer()
         self.user_playback_timer.setInterval(20)
         def update_playback_line():
@@ -1140,9 +1148,6 @@ class PitchAccentApp(QMainWindow):
                 self.pg_user_playback_line.setValue(0)
         self.user_playback_timer.timeout.connect(update_playback_line)
         self.user_playback_timer.start()
-        # Start loop playback in a background thread
-        import threading
-        threading.Thread(target=self._loop_user_thread, daemon=True).start()
 
     def _loop_user_thread(self):
         try:
@@ -1185,10 +1190,6 @@ class PitchAccentApp(QMainWindow):
             pitch_values = pitch.selected_array['frequency']
             pitch_times = pitch.xs()
             voiced = pitch_values > 0
-            print(f'[DEBUG] User pitch values: {pitch_values}')
-            print(f'[DEBUG] User pitch voiced mask: {voiced}')
-            print(f'[DEBUG] User pitch times: {pitch_times}')
-            print(f'[DEBUG] Any voiced: {np.any(voiced)}')
             self.user_times = pitch_times
             self.user_pitch = pitch_values
             self.user_voiced = voiced
