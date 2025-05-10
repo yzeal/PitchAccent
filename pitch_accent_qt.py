@@ -887,15 +887,23 @@ class PitchAccentApp(QMainWindow):
             self._loop_delay_timer.stop()
             self._loop_delay_timer = None
         start_time = self._loop_start if self._loop_end is not None else 0
-        self._expecting_seek = True
-        self._seek_grace_start = time.time()
-        self.vlc_player.set_time(int(start_time * 1000))
+        # Robust stop: pause first, then seek, then pause again
         self.vlc_player.pause()
+        def seek_and_pause():
+            self._expecting_seek = True
+            self._seek_grace_start = time.time()
+            self.vlc_player.set_time(int(start_time * 1000))
+            QTimer.singleShot(100, self.vlc_player.pause)
+        QTimer.singleShot(100, seek_and_pause)
         self.play_pause_btn.setText("Play")
         self.stop_btn.setEnabled(False)
         self.vlc_poll_timer.stop()
         self._indicator_timer.stop()
         self._indicator_timer_active = False
+        # Reset indicator visually
+        self.pg_playback_line.setValue(start_time)
+        self._last_playback_time = time.time()
+        self._last_playback_pos = start_time
 
     def show_first_frame(self):
         """Show first frame of video"""
@@ -1036,9 +1044,7 @@ class PitchAccentApp(QMainWindow):
 
     def play_user(self):
         """Play/Pause toggle for user recording"""
-        print('[DEBUG] play_user called')
         if self.user_playing:
-            print('[DEBUG] play_user: already playing, pausing')
             # Pause logic
             self.user_playback_paused = True
             if hasattr(self, 'user_playback_timer') and self.user_playback_timer is not None:
@@ -1048,11 +1054,10 @@ class PitchAccentApp(QMainWindow):
             self.user_playback_pos = time.time() - self.user_playback_start_time
             self.user_playing = False
             self.play_user_btn.setText('Play User')
-            self.stop_user_btn.setEnabled(False)
+            self.stop_user_btn.setEnabled(True)
             return
         # If resuming from pause
         if self.user_playback_paused:
-            print('[DEBUG] play_user: resuming from pause')
             self.user_playback_paused = False
             self.user_playing = True
             self.play_user_btn.setText('Pause User')
@@ -1205,10 +1210,14 @@ class PitchAccentApp(QMainWindow):
             self.stop_user_btn.setEnabled(False)
 
     def stop_user(self):
-        """Stop user audio playback"""
+        """Stop user audio playback and reset to start"""
         self.user_playing = False
+        self.user_playback_paused = False
+        self.user_playback_pos = 0.0
         sd.stop()
         self.stop_user_btn.setEnabled(False)
+        self.play_user_btn.setText('Play User')
+        self.pg_user_playback_line.setValue(0)
         self._cleanup_playback_lines()
 
     def process_user_audio(self):
