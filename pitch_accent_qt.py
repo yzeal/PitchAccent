@@ -1422,6 +1422,9 @@ class PitchAccentApp(QMainWindow):
                     self.span.clear()
                 except Exception:
                     pass
+            # Reset the PyQtGraph region to the full valid range
+            if hasattr(self, 'pg_region'):
+                self.pg_region.setRegion([0.0, max_end])
             self.redraw_waveform()
             self.canvas.draw_idle()
 
