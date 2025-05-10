@@ -543,8 +543,7 @@ class PitchAccentApp(QMainWindow):
                         self.pg_user_segments.append(seg_curve)
                     start = None
             if len(x) > 0:
-                max_end = x[-1] - (self._default_selection_margin + 0.05)
-                self.pg_user_plot.setXRange(0, max_end, padding=0)
+                self.pg_user_plot.setXRange(0, x[-1], padding=0)
 
     def redraw_waveform(self):
         # Deprecated: use redraw_native_waveform and redraw_user_waveform instead
@@ -1215,8 +1214,7 @@ class PitchAccentApp(QMainWindow):
                         self.pg_user_segments.append(seg_curve)
                     start = None
             if len(pitch_times) > 0:
-                max_end = pitch_times[-1] - (self._default_selection_margin + 0.05)
-                self.pg_user_plot.setXRange(0, max_end, padding=0)
+                self.pg_user_plot.setXRange(0, pitch_times[-1], padding=0)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
             print(f'[DEBUG] Exception in process_user_audio: {e}')
