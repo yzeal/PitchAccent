@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QComboBox, QCheckBox, QLineEdit,
     QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider, QDialog, QFormLayout, QDialogButtonBox, QKeySequenceEdit
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl
+from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl, QRect
 from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut, QIntValidator, QPen
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -75,17 +75,30 @@ class VideoWidget(QLabel):
             painter.end()
 
 class PlaybackLineOverlay(QWidget):
-    def __init__(self, parent):
+    def __init__(self, parent, get_axes_bbox_func, name=None):
         super().__init__(parent)
+        self.get_axes_bbox_func = get_axes_bbox_func
+        self.name = name or "Overlay"
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setGeometry(parent.geometry())
-        self.raise_()
         self._x_pos = 0
+        self.update_geometry()
+        self.raise_()
+
+    def update_geometry(self):
+        bbox = self.get_axes_bbox_func()
+        self.setGeometry(bbox)
+        # Debug print
+        try:
+            ax = self.get_axes_bbox_func.__closure__[0].cell_contents
+            title = ax.get_title() if hasattr(ax, 'get_title') else str(ax)
+        except Exception:
+            title = 'Unknown'
+        print(f"[DEBUG] {self.name} update_geometry: set to {self.geometry()}, axes title: {title}")
 
     def set_x_position(self, x):
-        self._x_pos = int(x)  # Ensure x is an integer
+        self._x_pos = int(x)
         self.update()
 
     def paintEvent(self, event):
@@ -97,7 +110,7 @@ class PlaybackLineOverlay(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.setGeometry(self.parent().geometry())
+        self.update_geometry()
 
 class PitchAccentApp(QMainWindow):
     def __init__(self):
@@ -313,12 +326,6 @@ class PitchAccentApp(QMainWindow):
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
-        # Create playback line overlays for both plots
-        self.native_playback_overlay = PlaybackLineOverlay(self.canvas)
-        self.native_playback_overlay.show()
-        self.user_playback_overlay = PlaybackLineOverlay(self.canvas)
-        self.user_playback_overlay.show()
-        
         # Create subplots
         self.ax_native = self.figure.add_subplot(211)  # Native pitch
         self.ax_user = self.figure.add_subplot(212)    # User pitch
@@ -339,6 +346,14 @@ class PitchAccentApp(QMainWindow):
             props=dict(alpha=0.3, facecolor='blue'),
             interactive=True
         )
+        
+        # Now create overlays
+        self.user_playback_overlay = PlaybackLineOverlay(self.canvas, lambda: self._get_axes_bbox(self.ax_native), name="UserOverlay")
+        self.user_playback_overlay.show()
+        print(f"[DEBUG] Created UserOverlay for axes title: {self.ax_native.get_title()}")
+        self.native_playback_overlay = PlaybackLineOverlay(self.canvas, lambda: self._get_axes_bbox(self.ax_user), name="NativeOverlay")
+        self.native_playback_overlay.show()
+        print(f"[DEBUG] Created NativeOverlay for axes title: {self.ax_user.get_title()}")
         
         # Add waveform section to main layout
         waveform_layout.addWidget(self.canvas)
@@ -566,6 +581,10 @@ class PitchAccentApp(QMainWindow):
         self.ax_user.grid(True)
         self.figure.tight_layout()
         self.canvas.draw()
+        if hasattr(self, 'native_playback_overlay'):
+            self.native_playback_overlay.update_geometry()
+        if hasattr(self, 'user_playback_overlay'):
+            self.user_playback_overlay.update_geometry()
 
     def select_file(self):
         print("[DEBUG] select_file: called")
@@ -819,30 +838,23 @@ class PitchAccentApp(QMainWindow):
             self.play_pause_btn.setText("Play")
             self.stop_btn.setEnabled(False)
             
-        # Update native playback line position
+        # Only update native_playback_overlay for native playback
         ms = self.vlc_player.get_time()
         max_end = self._clip_duration - self._default_selection_margin - 0.05
         t = 0.0
         if ms is not None and ms >= 0:
             t = ms / 1000.0
         t = max(0.0, min(t, max_end))
-        
-        # Convert time to x-pixel position for native plot
         ax = self.ax_native
         x_min, x_max = ax.get_xlim()
-        bbox = self.canvas.geometry()
-        ax_bbox = ax.get_position()
-        left = int(ax_bbox.x0 * bbox.width())
-        right = int(ax_bbox.x1 * bbox.width())
-        width = right - left
-        
+        bbox = self.native_playback_overlay.geometry()
+        width = bbox.width()
         if x_max > x_min:
             frac = (t - x_min) / (x_max - x_min)
             frac = min(1.0, max(0.0, frac))
         else:
             frac = 0.0
-        x = int(left + frac * width)
-        
+        x = int(frac * width)
         self.native_playback_overlay.set_x_position(x)
 
     def stop_native(self):
@@ -928,21 +940,17 @@ class PitchAccentApp(QMainWindow):
             max_end = self._clip_duration - self._default_selection_margin - 0.05
             t = max(0.0, min(t, max_end))
             
-            # Convert time to x-pixel position for native plot
+            # Use native overlay geometry for pixel calculation
             ax = self.ax_native
             x_min, x_max = ax.get_xlim()
-            bbox = self.canvas.geometry()
-            ax_bbox = ax.get_position()
-            left = int(ax_bbox.x0 * bbox.width())
-            right = int(ax_bbox.x1 * bbox.width())
-            width = right - left
-            
+            bbox = self.native_playback_overlay.geometry()
+            width = bbox.width()
             if x_max > x_min:
                 frac = (t - x_min) / (x_max - x_min)
                 frac = min(1.0, max(0.0, frac))
             else:
                 frac = 0.0
-            x = int(left + frac * width)
+            x = int(frac * width)
             
             self.native_playback_overlay.set_x_position(x)
 
@@ -1071,21 +1079,17 @@ class PitchAccentApp(QMainWindow):
             elapsed = time.time() - self.user_playback_start_time
             pos = elapsed
             
-            # Convert time to x-pixel position for user plot
+            # Only update user_playback_overlay for user playback
             ax = self.ax_user
             x_min, x_max = ax.get_xlim()
-            bbox = self.canvas.geometry()
-            ax_bbox = ax.get_position()
-            left = int(ax_bbox.x0 * bbox.width())
-            right = int(ax_bbox.x1 * bbox.width())
-            width = right - left
-            
+            bbox = self.user_playback_overlay.geometry()
+            width = bbox.width()
             if x_max > x_min:
                 frac = (pos - x_min) / (x_max - x_min)
                 frac = min(1.0, max(0.0, frac))
             else:
                 frac = 0.0
-            x = int(left + frac * width)
+            x = int(frac * width)
             
             self.user_playback_overlay.set_x_position(x)
             
@@ -1138,10 +1142,6 @@ class PitchAccentApp(QMainWindow):
         import time
         from PyQt6.QtCore import QTimer
         self._cleanup_playback_lines()
-        if hasattr(self, 'user_playback_overlay') and self.user_playback_overlay:
-            self.user_playback_overlay.remove()
-        self.user_playback_overlay = self.ax_user.axvline(0, color='red', linestyle='--', linewidth=2)
-        self.canvas.draw_idle()
         self.user_playback_start_time = time.time()
         try:
             import numpy as np
@@ -1502,6 +1502,15 @@ class PitchAccentApp(QMainWindow):
                         self.vlc_player.play()
                 except Exception as e:
                     print(f"[DEBUG] Error setting VLC audio device: {e}")
+
+    def _get_axes_bbox(self, ax):
+        bbox = ax.get_position()
+        canvas_geom = self.canvas.geometry()
+        left = int(bbox.x0 * canvas_geom.width())
+        top = int(bbox.y0 * canvas_geom.height())
+        width = int((bbox.x1 - bbox.x0) * canvas_geom.width())
+        height = int((bbox.y1 - bbox.y0) * canvas_geom.height())
+        return QRect(left, top, width, height)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
