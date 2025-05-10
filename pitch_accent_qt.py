@@ -1012,7 +1012,7 @@ class PitchAccentApp(QMainWindow):
                     QMessageBox.critical(self, "Error", f"Exception during saving recording: {e}")
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(0, self.process_user_audio)
-                QTimer.singleShot(0, lambda: self.play_user_btn.setEnabled(True))
+                QTimer.singleShot(0, lambda: (print('[DEBUG] Forcing play_user_btn enabled'), self.play_user_btn.setEnabled(True)))
                 QTimer.singleShot(0, lambda: self.loop_user_btn.setEnabled(True))
             except Exception as thread_inner_e:
                 print(f"[DEBUG] Exception in _record_thread inner block: {thread_inner_e}")
@@ -1023,6 +1023,7 @@ class PitchAccentApp(QMainWindow):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Exception in recording thread (outer): {thread_outer_e}")
         finally:
+            print('[DEBUG] _record_thread finally block')
             self.recording = False
             self.record_btn.setText("Record")
             self.recording_indicator.setVisible(False)
@@ -1034,7 +1035,9 @@ class PitchAccentApp(QMainWindow):
 
     def play_user(self):
         """Play user recording"""
+        print('[DEBUG] play_user called')
         if self.user_playing:
+            print('[DEBUG] play_user: already playing')
             return
         self.user_playing = True
         self.play_user_btn.setEnabled(False)
@@ -1076,8 +1079,10 @@ class PitchAccentApp(QMainWindow):
         threading.Thread(target=self._play_user_thread, daemon=True).start()
 
     def _play_user_thread(self):
+        print('[DEBUG] _play_user_thread started')
         try:
             sample_rate, audio_data = wavfile.read(self.user_audio_path)
+            print(f'[DEBUG] _play_user_thread: audio_data shape: {audio_data.shape}, sample_rate: {sample_rate}')
             # Trim trailing zeros (silence) for playback
             abs_rec = np.abs(audio_data.squeeze())
             nonzero = np.where(abs_rec > 10)[0]  # int16 threshold
@@ -1086,11 +1091,12 @@ class PitchAccentApp(QMainWindow):
                 audio_data = audio_data[:last]
             # Get selected output device
             device_id = self.output_devices[0]['index']  # Use first output device for now
+            print(f'[DEBUG] _play_user_thread: playing on device_id {device_id}')
             sd.play(audio_data, sample_rate, device=device_id)
             sd.wait()
             self.user_playing = False
         except Exception as e:
-            print(f"Error during playback: {e}")
+            print(f"[DEBUG] Error during playback: {e}")
         finally:
             self.user_playing = False
             self.play_user_btn.setEnabled(True)
@@ -1181,6 +1187,7 @@ class PitchAccentApp(QMainWindow):
         """Process the user recording to extract and plot pitch curve"""
         self._cleanup_playback_lines()
         try:
+            print('[DEBUG] process_user_audio called')
             if not os.path.exists(self.user_audio_path):
                 print('[DEBUG] User audio file does not exist!')
                 return
@@ -1193,6 +1200,8 @@ class PitchAccentApp(QMainWindow):
             self.user_pitch = pitch_values
             self.user_voiced = voiced
             self.redraw_user_waveform()
+            print('[DEBUG] process_user_audio: enabling play_user_btn')
+            self.play_user_btn.setEnabled(True)
             if self.pg_user_curve is not None:
                 self.pg_user_plot.removeItem(self.pg_user_curve)
                 self.pg_user_curve = None
