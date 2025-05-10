@@ -377,7 +377,15 @@ class PitchAccentApp(QMainWindow):
         self.pg_user_plot = pg.PlotWidget()
         waveform_layout.addWidget(self.pg_user_plot)
         self.pg_curve = None
-        self.pg_region = pg.LinearRegionItem([0.0, 1.0], movable=False, brush=(50, 50, 200, 50))
+        # Create region with proper configuration for edge dragging
+        self.pg_region = pg.LinearRegionItem(
+            values=[0.0, 1.0],
+            brush=(50, 50, 200, 50),
+            movable=True,  # Enable movement for edges
+            bounds=(0, 1),  # Set bounds
+            span=(0, 1)    # Set span
+        )
+        self.pg_region.setZValue(10)  # Make sure region is above the plot
         self.pg_plot.addItem(self.pg_region)
         self.pg_region.sigRegionChanged.connect(self._on_pg_region_changed)
         self.pg_playback_line = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=2))
@@ -797,6 +805,8 @@ class PitchAccentApp(QMainWindow):
         if len(pitch_times) > 0:
             max_end = pitch_times[-1] - (self._default_selection_margin + 0.05)
             self.pg_plot.setXRange(0, max_end, padding=0)
+            # Update region bounds to match the valid range
+            self.pg_region.setBounds((0, max_end))
         # Step 3: Update region to match new audio
         self.pg_region.setRegion([0.0, max_end])
         # Step 4: Reset playback indicator to start
