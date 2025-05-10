@@ -899,7 +899,7 @@ class PitchAccentApp(QMainWindow):
             self._last_playback_pos = t
 
         # Start indicator timer and show overlay on first valid poll
-        if not self._indicator_timer_active and t > 0.01:
+        if not self._indicator_timer_active:
             self._indicator_timer.start()
             self._indicator_timer_active = True
             self.native_playback_overlay.show()
