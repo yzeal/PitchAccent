@@ -347,6 +347,8 @@ class PitchAccentApp(QMainWindow):
         self.pg_plot.getViewBox().setMouseMode(pg.ViewBox.PanMode)
         self.pg_plot.getViewBox().setAspectLocked(False)
         self.pg_plot.getViewBox().setMouseEnabled(x=True, y=False)
+        # Set white background
+        self.pg_plot.setBackground('w')
         waveform_layout.addWidget(self.pg_plot)
         # Step 6: Add a second PyQtGraph plot widget for the user pitch curve
         self.pg_user_plot = pg.PlotWidget()
@@ -357,6 +359,10 @@ class PitchAccentApp(QMainWindow):
         self.pg_user_plot.getViewBox().setMouseMode(pg.ViewBox.PanMode)
         self.pg_user_plot.getViewBox().setAspectLocked(False)
         self.pg_user_plot.getViewBox().setMouseEnabled(x=True, y=False)
+        # Set white background
+        self.pg_user_plot.setBackground('w')
+        # Set initial x range to start at 0
+        self.pg_user_plot.setXRange(0, 1, padding=0)
         waveform_layout.addWidget(self.pg_user_plot)
         self.pg_curve = None
         # Create region with proper configuration for edge dragging
@@ -698,31 +704,42 @@ class PitchAccentApp(QMainWindow):
         max_end = self._clip_duration - self._default_selection_margin - 0.05
         self._loop_start = 0.0
         self._loop_end = max_end
-        self.redraw_native_waveform()
-        if self.pg_curve is not None:
-            self.pg_plot.removeItem(self.pg_curve)
-            self.pg_curve = None
-        if hasattr(self, 'pg_native_segments'):
-            for seg in self.pg_native_segments:
-                self.pg_plot.removeItem(seg)
-        self.pg_native_segments = []
+        
+        # Clear existing items
+        self.pg_plot.clear()
+        self.pg_region = pg.LinearRegionItem(
+            values=[0.0, max_end],
+            brush=(50, 50, 200, 50),
+            movable=True,
+            bounds=(0, max_end),
+            span=(0, 1)
+        )
+        self.pg_region.setZValue(10)
+        self.pg_plot.addItem(self.pg_region)
+        self.pg_region.sigRegionChanged.connect(self._on_pg_region_changed)
+        
+        # Add playback line
+        self.pg_playback_line = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=2))
+        self.pg_plot.addItem(self.pg_playback_line)
+        
+        # Plot pitch curve more efficiently
         pen = pg.mkPen('b', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
-        start = None
-        for i in range(len(voiced)):
-            if voiced[i] and start is None:
-                start = i
-            elif (not voiced[i] or i == len(voiced) - 1) and start is not None:
-                end = i if not voiced[i] else i + 1
-                if end - start > 1:
-                    seg_x = pitch_times[start:end]
-                    seg_y = pitch_values[start:end]
-                    seg_curve = self.pg_plot.plot(seg_x, seg_y, pen=pen)
-                    self.pg_native_segments.append(seg_curve)
-                start = None
-        if len(pitch_times) > 0:
-            max_end = pitch_times[-1] - (self._default_selection_margin + 0.05)
-            self.pg_plot.setXRange(0, max_end, padding=0)
-            self.pg_region.setBounds((0, max_end))
+        # Create a single plot item for all voiced segments
+        voiced_indices = np.where(voiced)[0]
+        if len(voiced_indices) > 0:
+            # Find continuous segments
+            segment_starts = np.where(np.diff(voiced_indices) > 1)[0] + 1
+            segment_starts = np.concatenate(([0], segment_starts))
+            segment_ends = np.concatenate((segment_starts[1:], [len(voiced_indices)]))
+            
+            # Plot each segment
+            for start, end in zip(segment_starts, segment_ends):
+                if end - start > 1:  # Only plot segments with more than one point
+                    seg_indices = voiced_indices[start:end]
+                    self.pg_plot.plot(pitch_times[seg_indices], pitch_values[seg_indices], pen=pen)
+        
+        # Set view range
+        self.pg_plot.setXRange(0, max_end, padding=0)
         self.pg_region.setRegion([0.0, max_end])
         self.pg_playback_line.setValue(0)
 
@@ -1240,30 +1257,35 @@ class PitchAccentApp(QMainWindow):
             self.user_times = pitch_times
             self.user_pitch = pitch_values
             self.user_voiced = voiced
-            self.redraw_user_waveform()
-            self.play_user_btn.setEnabled(True)
-            if self.pg_user_curve is not None:
-                self.pg_user_plot.removeItem(self.pg_user_curve)
-                self.pg_user_curve = None
-            if hasattr(self, 'pg_user_segments'):
-                for seg in self.pg_user_segments:
-                    self.pg_user_plot.removeItem(seg)
-            self.pg_user_segments = []
+            
+            # Clear existing items
+            self.pg_user_plot.clear()
+            
+            # Add playback line
+            self.pg_user_playback_line = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=2))
+            self.pg_user_plot.addItem(self.pg_user_playback_line)
+            
+            # Plot pitch curve more efficiently
             pen = pg.mkPen('orange', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
-            start = None
-            for i in range(len(voiced)):
-                if voiced[i] and start is None:
-                    start = i
-                elif (not voiced[i] or i == len(voiced) - 1) and start is not None:
-                    end = i if not voiced[i] else i + 1
-                    if end - start > 1:
-                        seg_x = pitch_times[start:end]
-                        seg_y = pitch_values[start:end]
-                        seg_curve = self.pg_user_plot.plot(seg_x, seg_y, pen=pen)
-                        self.pg_user_segments.append(seg_curve)
-                    start = None
+            # Create a single plot item for all voiced segments
+            voiced_indices = np.where(voiced)[0]
+            if len(voiced_indices) > 0:
+                # Find continuous segments
+                segment_starts = np.where(np.diff(voiced_indices) > 1)[0] + 1
+                segment_starts = np.concatenate(([0], segment_starts))
+                segment_ends = np.concatenate((segment_starts[1:], [len(voiced_indices)]))
+                
+                # Plot each segment
+                for start, end in zip(segment_starts, segment_ends):
+                    if end - start > 1:  # Only plot segments with more than one point
+                        seg_indices = voiced_indices[start:end]
+                        self.pg_user_plot.plot(pitch_times[seg_indices], pitch_values[seg_indices], pen=pen)
+            
+            # Set view range
             if len(pitch_times) > 0:
                 self.pg_user_plot.setXRange(0, pitch_times[-1], padding=0)
+            
+            self.play_user_btn.setEnabled(True)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
             print(f'[DEBUG] Exception in process_user_audio: {e}')
