@@ -1504,12 +1504,17 @@ class PitchAccentApp(QMainWindow):
                     print(f"[DEBUG] Error setting VLC audio device: {e}")
 
     def _get_axes_bbox(self, ax):
-        bbox = ax.get_position()
-        canvas_geom = self.canvas.geometry()
-        left = int(bbox.x0 * canvas_geom.width())
-        top = int(bbox.y0 * canvas_geom.height())
-        width = int((bbox.x1 - bbox.x0) * canvas_geom.width())
-        height = int((bbox.y1 - bbox.y0) * canvas_geom.height())
+        # Get the renderer from the canvas
+        try:
+            renderer = self.canvas.renderer
+        except AttributeError:
+            renderer = self.canvas.figure.canvas.get_renderer()
+        bbox = ax.get_window_extent(renderer)
+        dpr = getattr(self.canvas, 'devicePixelRatioF', lambda: 1.0)()
+        left = int(bbox.x0 / dpr)
+        top = int(bbox.y0 / dpr) - 21  # Apply a small negative offset
+        width = int((bbox.x1 - bbox.x0) / dpr)
+        height = int((bbox.y1 - bbox.y0) / dpr)
         return QRect(left, top, width, height)
 
 if __name__ == "__main__":
