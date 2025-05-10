@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QComboBox, QCheckBox, QLineEdit,
     QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider, QDialog, QFormLayout, QDialogButtonBox, QKeySequenceEdit
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl, QRect
+from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl, QRect, QPoint
 from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut, QIntValidator, QPen
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -1653,9 +1653,28 @@ class PitchAccentApp(QMainWindow):
     def on_mouse_clicked(self, event):
         """Handle mouse clicks for drawing selection"""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Convert mouse position to plot coordinates
-            pos = self.pg_plot.getViewBox().mapSceneToView(event.pos())
-            x = pos.x()
+            # Get the plot's view box and transform
+            view = self.pg_plot.getViewBox()
+            # Get the mouse position in scene coordinates
+            scene_pos = event.pos()
+            
+            # Get the plot's geometry
+            plot_rect = self.pg_plot.geometry()
+            # Get the view box's geometry
+            view_rect = view.geometry()
+            
+            # Calculate the padding and convert to integer
+            left_padding = int(view_rect.left())
+            
+            # Adjust the scene position by adding the padding
+            adjusted_pos = scene_pos + QPoint(left_padding, 0)
+            
+            # Transform to view coordinates
+            view_pos = view.mapSceneToView(adjusted_pos)
+            x = view_pos.x()
+            
+            # Debug print
+            print(f"Mouse scene pos: {scene_pos}, Adjusted pos: {adjusted_pos}, View pos: {view_pos}, X: {x}")
             
             # Clamp to valid range
             max_end = self.native_times[-1] - (self._default_selection_margin + 0.05) if hasattr(self, 'native_times') and len(self.native_times) > 0 else 0
