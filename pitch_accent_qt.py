@@ -638,9 +638,10 @@ class PitchAccentApp(QMainWindow):
                     audio.write_audiofile(audio_path)
                     print("[DEBUG] load_file: audio extracted")
                     self.vlc_player.set_hwnd(int(self.video_widget.winId()))
-                    self.vlc_player.set_media(None)
-                    self.vlc_player.stop()
-                    self.video_widget.hide()
+                    media = self.vlc_instance.media_new(file_path)
+                    self.vlc_player.set_media(media)
+                    print("[DEBUG] load_file: media set for VLC (audio file)")
+                    self.video_widget.show()
                 else:
                     print("[DEBUG] load_file: unsupported file type")
                     raise ValueError("Unsupported file type.")
