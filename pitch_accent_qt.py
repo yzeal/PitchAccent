@@ -149,6 +149,8 @@ class PitchAccentApp(QMainWindow):
         self._expecting_seek = False
         self._seek_grace_start = None
         self._seek_grace_period = 0.3  # seconds
+        self.user_playback_paused = False
+        self.user_playback_pos = 0.0
         
         # Get audio devices
         self.input_devices = [d for d in sd.query_devices() if d['max_input_channels'] > 0]
@@ -1023,7 +1025,6 @@ class PitchAccentApp(QMainWindow):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Exception in recording thread (outer): {thread_outer_e}")
         finally:
-            print('[DEBUG] _record_thread finally block')
             self.recording = False
             self.record_btn.setText("Record")
             self.recording_indicator.setVisible(False)
@@ -1034,24 +1035,48 @@ class PitchAccentApp(QMainWindow):
         self.recording_indicator.setVisible(False)
 
     def play_user(self):
-        """Play user recording"""
+        """Play/Pause toggle for user recording"""
         print('[DEBUG] play_user called')
         if self.user_playing:
-            print('[DEBUG] play_user: already playing')
+            print('[DEBUG] play_user: already playing, pausing')
+            # Pause logic
+            self.user_playback_paused = True
+            if hasattr(self, 'user_playback_timer') and self.user_playback_timer is not None:
+                self.user_playback_timer.stop()
+            sd.stop()
+            # Save current position
+            self.user_playback_pos = time.time() - self.user_playback_start_time
+            self.user_playing = False
+            self.play_user_btn.setText('Play User')
+            self.stop_user_btn.setEnabled(False)
             return
+        # If resuming from pause
+        if self.user_playback_paused:
+            print('[DEBUG] play_user: resuming from pause')
+            self.user_playback_paused = False
+            self.user_playing = True
+            self.play_user_btn.setText('Pause User')
+            self.stop_user_btn.setEnabled(True)
+            QTimer.singleShot(0, lambda: self.start_user_playback_with_timer(resume=True))
+            return
+        # Start playback from beginning
         self.user_playing = True
-        self.play_user_btn.setEnabled(False)
+        self.play_user_btn.setText('Pause User')
         self.loop_user_btn.setEnabled(False)
         self.stop_user_btn.setEnabled(True)
-        # Start playback with timer for moving line
-        QTimer.singleShot(0, self.start_user_playback_with_timer)
+        self.user_playback_pos = 0.0
+        QTimer.singleShot(0, lambda: self.start_user_playback_with_timer(resume=False))
 
-    def start_user_playback_with_timer(self):
+    def start_user_playback_with_timer(self, resume=False):
         import time
         from PyQt6.QtCore import QTimer
         # Prevent overlapping playbacks/timers
         self._cleanup_playback_lines()
-        self.user_playback_start_time = time.time()
+        if resume:
+            self.user_playback_start_time = time.time() - self.user_playback_pos
+        else:
+            self.user_playback_start_time = time.time()
+            self.user_playback_pos = 0.0
         try:
             import numpy as np
             import scipy.io.wavfile as wavfile
@@ -1072,17 +1097,17 @@ class PitchAccentApp(QMainWindow):
                 except Exception:
                     pass
                 self.pg_user_playback_line.setValue(0)
+                self.user_playback_pos = 0.0
+                self.play_user_btn.setText('Play User')
         self.user_playback_timer.timeout.connect(update_playback_line)
         self.user_playback_timer.start()
         # Start playback in a background thread
         import threading
-        threading.Thread(target=self._play_user_thread, daemon=True).start()
+        threading.Thread(target=lambda: self._play_user_thread(resume=resume), daemon=True).start()
 
-    def _play_user_thread(self):
-        print('[DEBUG] _play_user_thread started')
+    def _play_user_thread(self, resume=False):
         try:
             sample_rate, audio_data = wavfile.read(self.user_audio_path)
-            print(f'[DEBUG] _play_user_thread: audio_data shape: {audio_data.shape}, sample_rate: {sample_rate}')
             # Trim trailing zeros (silence) for playback
             abs_rec = np.abs(audio_data.squeeze())
             nonzero = np.where(abs_rec > 10)[0]  # int16 threshold
@@ -1091,7 +1116,9 @@ class PitchAccentApp(QMainWindow):
                 audio_data = audio_data[:last]
             # Get selected output device
             device_id = self.output_devices[0]['index']  # Use first output device for now
-            print(f'[DEBUG] _play_user_thread: playing on device_id {device_id}')
+            if resume and self.user_playback_pos > 0.0:
+                start_frame = int(self.user_playback_pos * sample_rate)
+                audio_data = audio_data[start_frame:]
             sd.play(audio_data, sample_rate, device=device_id)
             sd.wait()
             self.user_playing = False
@@ -1102,6 +1129,7 @@ class PitchAccentApp(QMainWindow):
             self.play_user_btn.setEnabled(True)
             self.loop_user_btn.setEnabled(True)
             self.stop_user_btn.setEnabled(False)
+            self.play_user_btn.setText('Play User')
 
     def loop_user(self):
         """Loop user recording"""
@@ -1187,7 +1215,6 @@ class PitchAccentApp(QMainWindow):
         """Process the user recording to extract and plot pitch curve"""
         self._cleanup_playback_lines()
         try:
-            print('[DEBUG] process_user_audio called')
             if not os.path.exists(self.user_audio_path):
                 print('[DEBUG] User audio file does not exist!')
                 return
@@ -1200,7 +1227,6 @@ class PitchAccentApp(QMainWindow):
             self.user_pitch = pitch_values
             self.user_voiced = voiced
             self.redraw_user_waveform()
-            print('[DEBUG] process_user_audio: enabling play_user_btn')
             self.play_user_btn.setEnabled(True)
             if self.pg_user_curve is not None:
                 self.pg_user_plot.removeItem(self.pg_user_curve)
