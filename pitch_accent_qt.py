@@ -349,10 +349,10 @@ class PitchAccentApp(QMainWindow):
         
         # Now create overlays
         self.user_playback_overlay = PlaybackLineOverlay(self.canvas, lambda: self._get_axes_bbox(self.ax_native), name="UserOverlay")
-        self.user_playback_overlay.show()
+        self.user_playback_overlay.hide()
         print(f"[DEBUG] Created UserOverlay for axes title: {self.ax_native.get_title()}")
         self.native_playback_overlay = PlaybackLineOverlay(self.canvas, lambda: self._get_axes_bbox(self.ax_user), name="NativeOverlay")
-        self.native_playback_overlay.show()
+        self.native_playback_overlay.hide()
         print(f"[DEBUG] Created NativeOverlay for axes title: {self.ax_user.get_title()}")
         
         # Add waveform section to main layout
@@ -720,6 +720,7 @@ class PitchAccentApp(QMainWindow):
                 print("[DEBUG] load_file: showing first frame")
                 self.show_first_frame()
                 print("[DEBUG] load_file: showed first frame")
+                self.native_playback_overlay.show()
             except Exception as e:
                 print(f"[DEBUG] load_file: Exception in file processing: {e}")
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
@@ -764,6 +765,7 @@ class PitchAccentApp(QMainWindow):
         self._loop_end = max_end
         
         self.redraw_waveform()
+        self.native_playback_overlay.show()
 
     def toggle_play_pause(self):
         """Handle play/pause button click"""
@@ -1233,6 +1235,7 @@ class PitchAccentApp(QMainWindow):
             self.user_pitch = pitch_values
             self.user_voiced = voiced
             self.redraw_waveform()
+            self.user_playback_overlay.show()
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Error processing user audio: {e}")
