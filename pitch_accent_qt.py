@@ -336,40 +336,6 @@ class PitchAccentApp(QMainWindow):
         waveform_section = QWidget()
         waveform_layout = QVBoxLayout(waveform_section)
         
-        # Create matplotlib figure and canvas
-        self.figure = Figure(figsize=(8, 6))
-        self.canvas = FigureCanvas(self.figure)
-        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        
-        # Create subplots
-        self.ax_native = self.figure.add_subplot(211)  # Native pitch
-        self.ax_user = self.figure.add_subplot(212)    # User pitch
-        
-        # Configure subplots
-        self.ax_native.set_ylabel('Hz')
-        self.ax_native.set_title('Native Speaker (Raw Pitch)')
-        self.ax_user.set_xlabel('Time (s)')
-        self.ax_user.set_ylabel('Hz')
-        self.ax_user.set_title('Your Recording (Raw Pitch)')
-        
-        # Add span selector for loop selection (on native pitch)
-        self.span = SpanSelector(
-            self.ax_native,
-            self.on_select,
-            'horizontal',
-            useblit=True,
-            props=dict(alpha=0.3, facecolor='blue'),
-            interactive=True
-        )
-        
-        # Now create overlays
-        self.user_playback_overlay = PlaybackLineOverlay(self.canvas, lambda: self._get_axes_bbox(self.ax_native), name="UserOverlay")
-        self.user_playback_overlay.hide()
-        self.native_playback_overlay = PlaybackLineOverlay(self.canvas, lambda: self._get_axes_bbox(self.ax_user), name="NativeOverlay")
-        self.native_playback_overlay.hide()
-        
-        # Add waveform section to main layout
-        waveform_layout.addWidget(self.canvas)
         # Step 1: Add a PyQtGraph plot widget below the matplotlib canvas
         self.pg_plot = pg.PlotWidget()
         self.pg_plot.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)  # Disable context menu
@@ -526,119 +492,68 @@ class PitchAccentApp(QMainWindow):
         """Redraw the native and user pitch curves with current loop selection"""
         # Safely stop playback timers and remove playback lines before redrawing
         self._cleanup_playback_lines()
-        
-        # Native pitch
-        self.ax_native.clear()
+        # Remove all matplotlib plotting code
+        # Only update PyQtGraph plots
         if hasattr(self, 'native_times') and hasattr(self, 'native_pitch') and hasattr(self, 'native_voiced'):
             x = self.native_times
             y = self.native_pitch
             voiced = self.native_voiced
+            # Remove all previous segment curves
+            if hasattr(self, 'pg_native_segments'):
+                for seg in self.pg_native_segments:
+                    self.pg_plot.removeItem(seg)
+            self.pg_native_segments = []
+            pen = pg.mkPen('b', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
             start = None
             for i in range(len(voiced)):
                 if voiced[i] and start is None:
                     start = i
                 elif (not voiced[i] or i == len(voiced) - 1) and start is not None:
                     end = i if not voiced[i] else i + 1
-                    seg_len = end - start
-                    if seg_len > 1:
+                    if end - start > 1:
                         seg_x = x[start:end]
                         seg_y = y[start:end]
-                        if len(seg_x) > 3:
-                            dense_x = np.linspace(seg_x[0], seg_x[-1], int((seg_x[-1] - seg_x[0]) / 0.003) + 1)
-                            f = interp1d(seg_x, seg_y, kind='linear')
-                            dense_y = f(dense_x)
-                            self.ax_native.plot(
-                                dense_x, dense_y, color='blue', linewidth=6, solid_capstyle='round', label='Native' if start == 0 else "")
-                        else:
-                            self.ax_native.plot(
-                                seg_x, seg_y, color='blue', linewidth=6, solid_capstyle='round', label='Native' if start == 0 else "")
+                        seg_curve = self.pg_plot.plot(seg_x, seg_y, pen=pen)
+                        self.pg_native_segments.append(seg_curve)
                     start = None
-            
-            # Draw selection overlay
-            if self._loop_end is not None:
-                # Draw selection area
-                self.ax_native.axvspan(self._loop_start, self._loop_end, color='blue', alpha=0.1)
-                # Draw selection boundaries
-                self.ax_native.axvline(self._loop_start, color='blue', linestyle='-', linewidth=2)
-                self.ax_native.axvline(self._loop_end, color='blue', linestyle='-', linewidth=2)
-                # Draw outside selection area with darker overlay
-                max_end = self._clip_duration - self._default_selection_margin - 0.05
-                if self._loop_start > 0:
-                    self.ax_native.axvspan(0, self._loop_start, color='gray', alpha=0.3)
-                if self._loop_end < max_end:
-                    self.ax_native.axvspan(self._loop_end, max_end, color='gray', alpha=0.3)
-            
-            self.ax_native.set_ylabel('Hz')
-            self.ax_native.set_title('Native Speaker (Raw Pitch)')
-            if hasattr(self, 'native_pitch') and np.any(self.native_voiced):
-                max_pitch = np.max(self.native_pitch[self.native_voiced])
-                self.ax_native.set_ylim(0, max(500, max_pitch + 20))
-            else:
-                self.ax_native.set_ylim(0, 500)
-            self.ax_native.legend()
-            self.ax_native.grid(True)
-            
-            # Set x limits to zoomed loop or full
-            if self.zoomed and self._loop_end is not None and (self._loop_start > 0.0 or self._loop_end < max_end):
-                self.ax_native.set_xlim(self._loop_start, self._loop_end)
-            else:
-                self.ax_native.set_xlim(0, max_end)
-            
-            # Always draw the playback position line (red)
-            playback_time = 0.0
-            try:
-                ms = self.vlc_player.get_time()
-                if ms is not None and ms >= 0:
-                    playback_time = ms / 1000.0
-            except Exception:
-                pass
-            # Clamp to axis range
-            playback_time = max(0.0, min(playback_time, max_end))
-            self.native_playback_overlay.set_x_position(playback_time)
-        
+            # Set x-axis range to match recording length minus selection margin
+            if len(x) > 0:
+                max_end = x[-1] - (self._default_selection_margin + 0.05)
+                self.pg_plot.setXRange(0, max_end, padding=0)
+                # Update region bounds to match the valid range
+                self.pg_region.setBounds((0, max_end))
+            # Update region to match new audio
+            self.pg_region.setRegion([0.0, max_end])
+            # Reset playback indicator to start
+            self.pg_playback_line.setValue(0)
         # User pitch
-        self.ax_user.clear()
         if hasattr(self, 'user_times') and hasattr(self, 'user_pitch') and hasattr(self, 'user_voiced'):
             x = self.user_times
             y = self.user_pitch
             voiced = self.user_voiced
+            # Remove all previous segment curves
+            if hasattr(self, 'pg_user_segments'):
+                for seg in self.pg_user_segments:
+                    self.pg_user_plot.removeItem(seg)
+            self.pg_user_segments = []
+            pen = pg.mkPen('orange', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
             start = None
             for i in range(len(voiced)):
                 if voiced[i] and start is None:
                     start = i
                 elif (not voiced[i] or i == len(voiced) - 1) and start is not None:
                     end = i if not voiced[i] else i + 1
-                    seg_len = end - start
-                    if seg_len > 1:
+                    if end - start > 1:
                         seg_x = x[start:end]
                         seg_y = y[start:end]
-                        if len(seg_x) > 3:
-                            dense_x = np.linspace(seg_x[0], seg_x[-1], int((seg_x[-1] - seg_x[0]) / 0.003) + 1)
-                            f = interp1d(seg_x, seg_y, kind='linear')
-                            dense_y = f(dense_x)
-                            self.ax_user.plot(
-                                dense_x, dense_y, color='orange', linewidth=6, solid_capstyle='round', label='User' if start == 0 else "")
-                        else:
-                            self.ax_user.plot(
-                                seg_x, seg_y, color='orange', linewidth=6, solid_capstyle='round', label='User' if start == 0 else "")
+                        seg_curve = self.pg_user_plot.plot(seg_x, seg_y, pen=pen)
+                        self.pg_user_segments.append(seg_curve)
                     start = None
-            # Set y-limits: if user pitch goes above 500 Hz, set ylim to max(500, max_user_pitch + 20)
-            if hasattr(self, 'user_pitch') and np.any(self.user_voiced):
-                max_user_pitch = np.max(self.user_pitch[self.user_voiced])
-                self.ax_user.set_ylim(0, max(500, max_user_pitch + 20))
-            else:
-                self.ax_user.set_ylim(0, 500)
-            self.ax_user.legend()
-        self.ax_user.set_xlabel('Time (s)')
-        self.ax_user.set_ylabel('Hz')
-        self.ax_user.set_title('Your Recording (Raw Pitch)')
-        self.ax_user.grid(True)
-        self.figure.tight_layout()
-        self.canvas.draw()
-        if hasattr(self, 'native_playback_overlay'):
-            self.native_playback_overlay.update_geometry()
-        if hasattr(self, 'user_playback_overlay'):
-            self.user_playback_overlay.update_geometry()
+            # Set x-axis range to match user recording length minus selection margin
+            if len(x) > 0:
+                max_end = x[-1] - (self._default_selection_margin + 0.05)
+                self.pg_user_plot.setXRange(0, max_end, padding=0)
+        # self.canvas.draw()
 
     def select_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -750,7 +665,6 @@ class PitchAccentApp(QMainWindow):
                 self.loop_checkbox.setEnabled(True)
                 self.record_btn.setEnabled(True)
                 self.show_first_frame()
-                self.native_playback_overlay.show()
             except Exception as e:
                 print(f"[DEBUG] load_file: Exception in file processing: {e}")
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
@@ -792,7 +706,6 @@ class PitchAccentApp(QMainWindow):
         self._loop_end = max_end
         
         self.redraw_waveform()
-        self.native_playback_overlay.show()
         # Step 8: Plot only voiced segments in PyQtGraph, with thick, rounded lines
         if self.pg_curve is not None:
             self.pg_plot.removeItem(self.pg_curve)
@@ -949,7 +862,6 @@ class PitchAccentApp(QMainWindow):
         if not self._indicator_timer_active:
             self._indicator_timer.start()
             self._indicator_timer_active = True
-            self.native_playback_overlay.show()
 
         # Snap overlay to actual position on poll (for pause/stop)
         if state not in [vlc.State.Playing, vlc.State.Buffering]:
@@ -976,17 +888,8 @@ class PitchAccentApp(QMainWindow):
         est_pos = self._last_playback_pos + (now - self._last_playback_time)
         max_end = self._clip_duration - self._default_selection_margin - 0.05
         est_pos = max(0.0, min(est_pos, max_end))
-        ax = self.ax_native
-        x_min, x_max = ax.get_xlim()
-        bbox = self.native_playback_overlay.geometry()
-        width = bbox.width()
-        if x_max > x_min:
-            frac_x = (est_pos - x_min) / (x_max - x_min)
-            frac_x = min(1.0, max(0.0, frac_x))
-        else:
-            frac_x = 0.0
-        x = int(frac_x * width)
-        self.native_playback_overlay.set_x_position(x)
+        # Use PyQtGraph's x range for indicator positioning
+        x_min, x_max = self.pg_plot.getViewBox().viewRange()[0]
         # Step 4: Update PyQtGraph playback indicator
         self.pg_playback_line.setValue(est_pos)
 
@@ -1006,8 +909,6 @@ class PitchAccentApp(QMainWindow):
         self.vlc_poll_timer.stop()
         self._indicator_timer.stop()
         self._indicator_timer_active = False
-        self.native_playback_overlay.hide()
-        self.update_native_playback_overlay(reset=True)
 
     def show_first_frame(self):
         """Show first frame of video"""
@@ -1045,7 +946,6 @@ class PitchAccentApp(QMainWindow):
                     self.vlc_player.pause()
                     self.play_pause_btn.setText("Play")
                     self.stop_btn.setEnabled(False)
-            self.update_native_playback_overlay(reset=True)
         QTimer.singleShot(0, handle_end)
 
     def _restart_loop(self, start_time, user_delay_ms=0):
@@ -1061,32 +961,6 @@ class PitchAccentApp(QMainWindow):
         self.play_pause_btn.setText("Pause")
         self.stop_btn.setEnabled(True)
         self.vlc_poll_timer.start()
-
-    def update_native_playback_overlay(self, reset=False):
-        if reset:
-            if hasattr(self, 'native_playback_overlay'):
-                self.native_playback_overlay.set_x_position(0)
-                self.native_playback_overlay.hide()
-            return
-        ms = self.vlc_player.get_time()
-        if ms is not None and ms >= 0:
-            t = ms / 1000.0
-            max_end = self._clip_duration - self._default_selection_margin - 0.05
-            t = max(0.0, min(t, max_end))
-            
-            # Use native overlay geometry for pixel calculation
-            ax = self.ax_native
-            x_min, x_max = ax.get_xlim()
-            bbox = self.native_playback_overlay.geometry()
-            width = bbox.width()
-            if x_max > x_min:
-                frac = (t - x_min) / (x_max - x_min)
-                frac = min(1.0, max(0.0, frac))
-            else:
-                frac = 0.0
-            x = int(frac * width)
-            
-            self.native_playback_overlay.set_x_position(x)
 
     def toggle_recording(self):
         """Toggle recording state"""
@@ -1426,7 +1300,7 @@ class PitchAccentApp(QMainWindow):
             if hasattr(self, 'pg_region'):
                 self.pg_region.setRegion([0.0, max_end])
             self.redraw_waveform()
-            self.canvas.draw_idle()
+            # self.canvas.draw_idle()
 
     def _cleanup_playback_lines(self):
         # Stop user playback timer and remove line
@@ -1653,7 +1527,7 @@ class PitchAccentApp(QMainWindow):
                 except Exception as e:
                     print(f"[DEBUG] Error setting VLC audio device: {e}")
 
-    def _get_axes_bbox(self, ax):
+    """def _get_axes_bbox(self, ax):
         # Get the renderer from the canvas
         try:
             renderer = self.canvas.renderer
@@ -1665,7 +1539,7 @@ class PitchAccentApp(QMainWindow):
         top = int(bbox.y0 / dpr) - 21  # Apply a small negative offset
         width = int((bbox.x1 - bbox.x0) / dpr)
         height = int((bbox.y1 - bbox.y0) / dpr)
-        return QRect(left, top, width, height)
+        return QRect(left, top, width, height)"""
 
     def on_mouse_clicked(self, event):
         """Handle mouse clicks for drawing selection"""
