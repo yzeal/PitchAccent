@@ -28,7 +28,6 @@ from PIL import Image, ImageOps
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 import vlc
-import pyqtgraph as pg
 
 class VideoWidget(QLabel):
     def __init__(self, parent=None):
@@ -179,7 +178,7 @@ class PitchAccentApp(QMainWindow):
         self.setup_shortcuts()
 
         # Make window non-resizable
-        # self.setFixedSize(self.size())
+        self.setFixedSize(self.size())
 
     def setup_ui(self):
         """Initialize the main UI components"""
@@ -370,25 +369,6 @@ class PitchAccentApp(QMainWindow):
         
         # Add waveform section to main layout
         waveform_layout.addWidget(self.canvas)
-        # Step 1: Add a PyQtGraph plot widget below the matplotlib canvas
-        self.pg_plot = pg.PlotWidget()
-        waveform_layout.addWidget(self.pg_plot)
-        # Step 6: Add a second PyQtGraph plot widget for the user pitch curve
-        self.pg_user_plot = pg.PlotWidget()
-        waveform_layout.addWidget(self.pg_user_plot)
-        self.pg_curve = None
-        self.pg_region = pg.LinearRegionItem([0.0, 1.0], movable=False, brush=(50, 50, 200, 50))
-        self.pg_plot.addItem(self.pg_region)
-        self.pg_region.sigRegionChanged.connect(self._on_pg_region_changed)
-        self.pg_playback_line = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=2))
-        self.pg_plot.addItem(self.pg_playback_line)
-        # Connect mouse click events for selection
-        self.pg_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
-        # Step 6: Prepare user pitch curve for separate plot
-        self.pg_user_curve = None
-        # Step 7: Add playback indicator to user plot
-        self.pg_user_playback_line = pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen('r', width=2))
-        self.pg_user_plot.addItem(self.pg_user_playback_line)
         main_layout.addWidget(waveform_section)
         
         # Set window size based on screen resolution
@@ -771,36 +751,6 @@ class PitchAccentApp(QMainWindow):
         
         self.redraw_waveform()
         self.native_playback_overlay.show()
-        # Step 8: Plot only voiced segments in PyQtGraph, with thick, rounded lines
-        if self.pg_curve is not None:
-            self.pg_plot.removeItem(self.pg_curve)
-            self.pg_curve = None
-        # Remove all previous segment curves
-        if hasattr(self, 'pg_native_segments'):
-            for seg in self.pg_native_segments:
-                self.pg_plot.removeItem(seg)
-        self.pg_native_segments = []
-        pen = pg.mkPen('b', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
-        start = None
-        for i in range(len(voiced)):
-            if voiced[i] and start is None:
-                start = i
-            elif (not voiced[i] or i == len(voiced) - 1) and start is not None:
-                end = i if not voiced[i] else i + 1
-                if end - start > 1:
-                    seg_x = pitch_times[start:end]
-                    seg_y = pitch_values[start:end]
-                    seg_curve = self.pg_plot.plot(seg_x, seg_y, pen=pen)
-                    self.pg_native_segments.append(seg_curve)
-                start = None
-        # Step 9: Set x-axis range to match recording length minus selection margin
-        if len(pitch_times) > 0:
-            max_end = pitch_times[-1] - (self._default_selection_margin + 0.05)
-            self.pg_plot.setXRange(0, max_end, padding=0)
-        # Step 3: Update region to match new audio
-        self.pg_region.setRegion([0.0, max_end])
-        # Step 4: Reset playback indicator to start
-        self.pg_playback_line.setValue(0)
 
     def toggle_play_pause(self):
         """Handle play/pause button click"""
@@ -963,8 +913,6 @@ class PitchAccentApp(QMainWindow):
             frac_x = 0.0
         x = int(frac_x * width)
         self.native_playback_overlay.set_x_position(x)
-        # Step 4: Update PyQtGraph playback indicator
-        self.pg_playback_line.setValue(est_pos)
 
     def stop_native(self):
         """Reset to start (or loop start) and pause"""
@@ -1164,6 +1112,7 @@ class PitchAccentApp(QMainWindow):
         from PyQt6.QtCore import QTimer
         # Prevent overlapping playbacks/timers
         self._cleanup_playback_lines()
+        
         self.user_playback_start_time = time.time()
         try:
             import numpy as np
@@ -1177,7 +1126,8 @@ class PitchAccentApp(QMainWindow):
         def update_playback_line():
             elapsed = time.time() - self.user_playback_start_time
             pos = elapsed
-            # Update user_playback_overlay for user playback (matplotlib)
+            
+            # Only update user_playback_overlay for user playback
             ax = self.ax_user
             x_min, x_max = ax.get_xlim()
             bbox = self.user_playback_overlay.geometry()
@@ -1188,16 +1138,15 @@ class PitchAccentApp(QMainWindow):
             else:
                 frac = 0.0
             x = int(frac * width)
+            
             self.user_playback_overlay.set_x_position(x)
-            # Step 7: Update PyQtGraph user playback indicator
-            self.pg_user_playback_line.setValue(pos)
+            
             if elapsed >= duration or not self.user_playing:
                 try:
                     self.user_playback_timer.stop()
                 except Exception:
                     pass
                 self.user_playback_overlay.set_x_position(0)
-                self.pg_user_playback_line.setValue(0)
         self.user_playback_timer.timeout.connect(update_playback_line)
         self.user_playback_timer.start()
         # Start playback in a background thread
@@ -1259,27 +1208,27 @@ class PitchAccentApp(QMainWindow):
         def update_playback_line():
             elapsed = (time.time() - self.user_playback_start_time) % duration if duration > 0 else 0
             pos = elapsed
-            # Update matplotlib overlay (legacy)
-            ax = self.ax_user
-            x_min, x_max = ax.get_xlim()
-            bbox = self.user_playback_overlay.geometry()
-            width = bbox.width()
-            if x_max > x_min:
-                frac = (pos - x_min) / (x_max - x_min)
-                frac = min(1.0, max(0.0, frac))
-            else:
-                frac = 0.0
-            x = int(frac * width)
-            self.user_playback_overlay.set_x_position(x)
-            # Step 7: Update PyQtGraph user playback indicator
-            self.pg_user_playback_line.setValue(pos)
+            try:
+                if self.user_playback_overlay and self.user_playback_overlay in self.ax_user.lines:
+                    self.user_playback_overlay.set_xdata([pos, pos])
+                    self.canvas.draw_idle()
+            except Exception:
+                pass
             if not self.user_playing:
                 try:
                     self.user_playback_timer.stop()
                 except Exception:
                     pass
-                self.user_playback_overlay.set_x_position(0)
-                self.pg_user_playback_line.setValue(0)
+                try:
+                    if self.user_playback_overlay and self.user_playback_overlay in self.ax_user.lines:
+                        self.user_playback_overlay.remove()
+                except Exception:
+                    pass
+                self.user_playback_overlay = None
+                try:
+                    self.canvas.draw_idle()
+                except Exception:
+                    pass
         self.user_playback_timer.timeout.connect(update_playback_line)
         self.user_playback_timer.start()
         # Start loop playback in a background thread
@@ -1319,7 +1268,9 @@ class PitchAccentApp(QMainWindow):
         """Process the user recording to extract and plot pitch curve"""
         self._cleanup_playback_lines()
         try:
+            print(f"[DEBUG] Processing user audio: {self.user_audio_path}")
             if not os.path.exists(self.user_audio_path):
+                print("[DEBUG] User audio file does not exist!")
                 return
             sound = parselmouth.Sound(self.user_audio_path)
             pitch = sound.to_pitch()
@@ -1331,32 +1282,6 @@ class PitchAccentApp(QMainWindow):
             self.user_voiced = voiced
             self.redraw_waveform()
             self.user_playback_overlay.show()
-            # Step 8: Plot only voiced segments in PyQtGraph, with thick, rounded lines
-            if self.pg_user_curve is not None:
-                self.pg_user_plot.removeItem(self.pg_user_curve)
-                self.pg_user_curve = None
-            # Remove all previous segment curves
-            if hasattr(self, 'pg_user_segments'):
-                for seg in self.pg_user_segments:
-                    self.pg_user_plot.removeItem(seg)
-            self.pg_user_segments = []
-            pen = pg.mkPen('orange', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
-            start = None
-            for i in range(len(voiced)):
-                if voiced[i] and start is None:
-                    start = i
-                elif (not voiced[i] or i == len(voiced) - 1) and start is not None:
-                    end = i if not voiced[i] else i + 1
-                    if end - start > 1:
-                        seg_x = pitch_times[start:end]
-                        seg_y = pitch_values[start:end]
-                        seg_curve = self.pg_user_plot.plot(seg_x, seg_y, pen=pen)
-                        self.pg_user_segments.append(seg_curve)
-                    start = None
-            # Step 9: Set x-axis range to match user recording length minus selection margin
-            if len(pitch_times) > 0:
-                max_end = pitch_times[-1] - (self._default_selection_margin + 0.05)
-                self.pg_user_plot.setXRange(0, max_end, padding=0)
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Error", f"Error processing user audio: {e}")
@@ -1614,7 +1539,7 @@ class PitchAccentApp(QMainWindow):
                                 self.vlc_player.audio_output_device_set('pulse', device_name)
                             except Exception:
                                 print("[DEBUG] Could not set specific audio device, using default")
-                
+                    
                     # Ensure volume is not muted and set to a reasonable level
                     self.vlc_player.audio_set_mute(False)
                     self.vlc_player.audio_set_volume(100)
@@ -1639,54 +1564,6 @@ class PitchAccentApp(QMainWindow):
         width = int((bbox.x1 - bbox.x0) / dpr)
         height = int((bbox.y1 - bbox.y0) / dpr)
         return QRect(left, top, width, height)
-
-    def on_mouse_clicked(self, event):
-        """Handle mouse clicks for drawing selection"""
-        if event.button() == Qt.MouseButton.LeftButton:
-            # Convert mouse position to plot coordinates
-            pos = self.pg_plot.getViewBox().mapSceneToView(event.pos())
-            x = pos.x()
-            
-            # Clamp to valid range
-            max_end = self.native_times[-1] - (self._default_selection_margin + 0.05) if hasattr(self, 'native_times') and len(self.native_times) > 0 else 0
-            x = max(0.0, min(x, max_end))
-            
-            # If we're starting a new selection
-            if not hasattr(self, '_selection_start'):
-                self._selection_start = x
-                # Create a temporary line to show the selection
-                self._temp_line = pg.InfiniteLine(pos=x, angle=90, pen=pg.mkPen('b', width=1))
-                self.pg_plot.addItem(self._temp_line)
-            else:
-                # Complete the selection
-                start = min(self._selection_start, x)
-                end = max(self._selection_start, x)
-                self.pg_region.setRegion([start, end])
-                # Remove temporary line
-                if hasattr(self, '_temp_line'):
-                    self.pg_plot.removeItem(self._temp_line)
-                    del self._temp_line
-                del self._selection_start
-
-    def _on_pg_region_changed(self):
-        """Handle region changes"""
-        region = self.pg_region.getRegion()
-        # Clamp to 0 and max_end
-        max_end = self.native_times[-1] - (self._default_selection_margin + 0.05) if hasattr(self, 'native_times') and len(self.native_times) > 0 else 0
-        start = max(0.0, min(region[0], max_end))
-        end = max(0.0, min(region[1], max_end))
-        # If the region was out of bounds, set it back
-        if start != region[0] or end != region[1]:
-            self.pg_region.setRegion([start, end])
-        self._loop_start, self._loop_end = start, end
-        self.update_loop_info()
-        # Enable zoom if a loop is selected (not full clip)
-        if self._loop_start > 0.0 or self._loop_end < max_end:
-            self.zoom_btn.setEnabled(True)
-        else:
-            self.zoom_btn.setEnabled(False)
-            self.zoomed = False
-            self.zoom_btn.setChecked(False)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
