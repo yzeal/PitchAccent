@@ -139,6 +139,16 @@ class PitchAccentApp(QMainWindow):
         self._is_looping = False
         self.zoomed = False
         self._loop_delay_timer = None
+        # For smooth playback indicator
+        self._last_playback_time = 0.0
+        self._last_playback_pos = 0.0
+        self._indicator_timer = QTimer()
+        self._indicator_timer.setInterval(16)  # ~60Hz
+        self._indicator_timer.timeout.connect(self._update_native_playback_indicator)
+        self._indicator_timer_active = False
+        self._expecting_seek = False
+        self._seek_grace_start = None
+        self._seek_grace_period = 0.3  # seconds
         
         # Get audio devices
         self.input_devices = [d for d in sd.query_devices() if d['max_input_channels'] > 0]
@@ -389,7 +399,7 @@ class PitchAccentApp(QMainWindow):
 
         # Single timer for overlay and state polling
         self.vlc_poll_timer = QTimer()
-        self.vlc_poll_timer.setInterval(50)
+        self.vlc_poll_timer.setInterval(50)  # Reverted back to 50ms
         self.vlc_poll_timer.timeout.connect(self.poll_vlc_state_and_overlay)
         # Set up VLC end-of-media event for looping
         self.vlc_events = self.vlc_player.event_manager()
@@ -785,9 +795,13 @@ class PitchAccentApp(QMainWindow):
             # Try to nudge the position slightly before playing
             current_time = self.vlc_player.get_time() / 1000.0
             if current_time < self._loop_start or current_time >= self._loop_end:
+                self._expecting_seek = True
+                self._seek_grace_start = time.time()
                 self.vlc_player.set_time(int(self._loop_start * 1000))
             else:
                 # Nudge by 10ms to force decoder refresh
+                self._expecting_seek = True
+                self._seek_grace_start = time.time()
                 self.vlc_player.set_time(int((current_time + 0.01) * 1000))
             self.vlc_player.play()
             self.play_pause_btn.setText("Pause")
@@ -800,6 +814,7 @@ class PitchAccentApp(QMainWindow):
 
     def poll_vlc_state_and_overlay(self):
         """Update UI based on VLC state and handle overlay"""
+        import time
         state = self.vlc_player.get_state()
         # Update Play/Pause button label
         if state in [vlc.State.Playing, vlc.State.Buffering]:
@@ -830,6 +845,8 @@ class PitchAccentApp(QMainWindow):
                     self._loop_delay_timer.timeout.connect(restart_if_still_looping)
                     self._loop_delay_timer.start(delay_val)
                 else:
+                    self._expecting_seek = True
+                    self._seek_grace_start = time.time()
                     self.vlc_player.set_time(int(self._loop_start * 1000))
                     if not self._is_looping:
                         self.vlc_player.pause()
@@ -839,24 +856,90 @@ class PitchAccentApp(QMainWindow):
         elif state == vlc.State.Paused:
             self.play_pause_btn.setText("Play")
             self.stop_btn.setEnabled(False)
-            
-        # Only update native_playback_overlay for native playback
+        # --- Update indicator state for smooth animation ---
+        now = time.time()
         ms = self.vlc_player.get_time()
         max_end = self._clip_duration - self._default_selection_margin - 0.05
         t = 0.0
         if ms is not None and ms >= 0:
             t = ms / 1000.0
         t = max(0.0, min(t, max_end))
+
+        # Calculate interpolated position
+        if hasattr(self, '_last_playback_time') and hasattr(self, '_last_playback_pos'):
+            dt = now - self._last_playback_time
+            interpolated_pos = self._last_playback_pos + dt
+            interpolated_pos = max(0.0, min(interpolated_pos, max_end))
+            
+            # Only update base position if:
+            # 1. We're expecting a seek (explicit jump)
+            # 2. The polled position is significantly ahead of our interpolation (VLC caught up)
+            # 3. We're paused/stopped (snap to actual position)
+            should_update = False
+            if self._expecting_seek:
+                print(f"[POLL] Accepting jump due to expected seek: last={self._last_playback_pos:.3f}, new={t:.3f}")
+                self._expecting_seek = False
+                should_update = True
+            elif state not in [vlc.State.Playing, vlc.State.Buffering]:
+                should_update = True
+            elif t > interpolated_pos + 0.1:  # VLC is ahead by more than 100ms
+                print(f"[POLL] VLC caught up: interp={interpolated_pos:.3f}, polled={t:.3f}")
+                should_update = True
+            
+            if should_update:
+                self._last_playback_time = now
+                self._last_playback_pos = t
+            else:
+                # Keep interpolating from last known position
+                self._last_playback_time = now
+                self._last_playback_pos = interpolated_pos
+        else:
+            # First poll
+            self._last_playback_time = now
+            self._last_playback_pos = t
+
+        # Start indicator timer and show overlay on first valid poll
+        if not self._indicator_timer_active and t > 0.01:
+            self._indicator_timer.start()
+            self._indicator_timer_active = True
+            self.native_playback_overlay.show()
+
+        # Snap overlay to actual position on poll (for pause/stop)
+        if state not in [vlc.State.Playing, vlc.State.Buffering]:
+            ax = self.ax_native
+            x_min, x_max = ax.get_xlim()
+            bbox = self.native_playback_overlay.geometry()
+            width = bbox.width()
+            if x_max > x_min:
+                frac = (t - x_min) / (x_max - x_min)
+                frac = min(1.0, max(0.0, frac))
+            else:
+                frac = 0.0
+            x = int(frac * width)
+            self.native_playback_overlay.set_x_position(x)
+
+    def _update_native_playback_indicator(self):
+        import time
+        if not self._indicator_timer_active:
+            return
+        state = self.vlc_player.get_state()
+        if state not in [vlc.State.Playing, vlc.State.Buffering]:
+            return
+        now = time.time()
+        est_pos = self._last_playback_pos + (now - self._last_playback_time)
+        max_end = self._clip_duration - self._default_selection_margin - 0.05
+        est_pos = max(0.0, min(est_pos, max_end))
+        print(f"[INDICATOR] now={now:.6f}, last_poll_time={self._last_playback_time:.6f}, last_poll_pos={self._last_playback_pos:.3f}, est_pos={est_pos:.3f}, dt={now-self._last_playback_time:.3f}")
         ax = self.ax_native
         x_min, x_max = ax.get_xlim()
         bbox = self.native_playback_overlay.geometry()
         width = bbox.width()
         if x_max > x_min:
-            frac = (t - x_min) / (x_max - x_min)
-            frac = min(1.0, max(0.0, frac))
+            frac_x = (est_pos - x_min) / (x_max - x_min)
+            frac_x = min(1.0, max(0.0, frac_x))
         else:
-            frac = 0.0
-        x = int(frac * width)
+            frac_x = 0.0
+        x = int(frac_x * width)
         self.native_playback_overlay.set_x_position(x)
 
     def stop_native(self):
@@ -866,15 +949,22 @@ class PitchAccentApp(QMainWindow):
             self._loop_delay_timer.stop()
             self._loop_delay_timer = None
         start_time = self._loop_start if self._loop_end is not None else 0
+        self._expecting_seek = True
+        self._seek_grace_start = time.time()
         self.vlc_player.set_time(int(start_time * 1000))
         self.vlc_player.pause()
         self.play_pause_btn.setText("Play")
         self.stop_btn.setEnabled(False)
         self.vlc_poll_timer.stop()
+        self._indicator_timer.stop()
+        self._indicator_timer_active = False
+        self.native_playback_overlay.hide()
         self.update_native_playback_overlay(reset=True)
 
     def show_first_frame(self):
         """Show first frame of video"""
+        self._expecting_seek = True
+        self._seek_grace_start = time.time()
         self.vlc_player.play()
         QTimer.singleShot(50, lambda: (
             self.vlc_player.pause(),
@@ -915,6 +1005,8 @@ class PitchAccentApp(QMainWindow):
     def _restart_loop(self, start_time, user_delay_ms=0):
         print(f"[DEBUG] _restart_loop: user_delay_ms={user_delay_ms}, start_time={start_time}")
         print(f"[DEBUG] Loop segment: start={self._loop_start}, end={self._loop_end}")
+        self._expecting_seek = True
+        self._seek_grace_start = time.time()
         self.vlc_player.set_time(int(start_time * 1000))
         print(f"[DEBUG] _restart_loop: called set_time({int(start_time * 1000)})")
         seek_wait = 150  # ms, a bit longer to ensure VLC is ready
@@ -935,6 +1027,7 @@ class PitchAccentApp(QMainWindow):
         if reset:
             if hasattr(self, 'native_playback_overlay'):
                 self.native_playback_overlay.set_x_position(0)
+                self.native_playback_overlay.hide()
             return
         ms = self.vlc_player.get_time()
         if ms is not None and ms >= 0:
