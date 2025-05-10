@@ -125,7 +125,7 @@ class PitchAccentApp(QMainWindow):
 
         # Connect device selection signals
         self.input_selector.currentIndexChanged.connect(self.on_input_device_changed)
-        self.output_selector.currentIndexChanged.connect(self.on_output_device_changed)
+        # self.output_selector.currentIndexChanged.connect(self.on_output_device_changed)
 
     def setup_ui(self):
         """Initialize the main UI components"""
@@ -145,9 +145,9 @@ class PitchAccentApp(QMainWindow):
         self.input_selector = QComboBox()
         self.input_selector.addItems([d['name'] for d in self.input_devices])
         
-        output_label = QLabel("Output Device:")
-        self.output_selector = QComboBox()
-        self.output_selector.addItems([d['name'] for d in self.output_devices])
+        # output_label = QLabel("Output Device:")
+        # self.output_selector = QComboBox()
+        # self.output_selector.addItems([d['name'] for d in self.output_devices])
         
         # Add loop info label
         self.loop_info_label = QLabel("Loop: Full clip")
@@ -159,8 +159,8 @@ class PitchAccentApp(QMainWindow):
         # Add widgets to top layout
         top_layout.addWidget(input_label)
         top_layout.addWidget(self.input_selector)
-        top_layout.addWidget(output_label)
-        top_layout.addWidget(self.output_selector)
+        # top_layout.addWidget(output_label)
+        # top_layout.addWidget(self.output_selector)
         top_layout.addWidget(self.shortcuts_btn)
         top_layout.addStretch()
         top_layout.addWidget(self.loop_info_label)
