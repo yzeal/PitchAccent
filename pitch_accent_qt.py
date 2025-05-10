@@ -372,9 +372,23 @@ class PitchAccentApp(QMainWindow):
         waveform_layout.addWidget(self.canvas)
         # Step 1: Add a PyQtGraph plot widget below the matplotlib canvas
         self.pg_plot = pg.PlotWidget()
+        self.pg_plot.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)  # Disable context menu
+        # Override context menu event
+        self.pg_plot.scene().contextMenu = lambda: None
+        # Configure ViewBox to only allow horizontal movement and zooming
+        self.pg_plot.getViewBox().setMouseMode(pg.ViewBox.PanMode)
+        self.pg_plot.getViewBox().setAspectLocked(False)
+        self.pg_plot.getViewBox().setMouseEnabled(x=True, y=False)
         waveform_layout.addWidget(self.pg_plot)
         # Step 6: Add a second PyQtGraph plot widget for the user pitch curve
         self.pg_user_plot = pg.PlotWidget()
+        self.pg_user_plot.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)  # Disable context menu
+        # Override context menu event
+        self.pg_user_plot.scene().contextMenu = lambda: None
+        # Configure ViewBox to only allow horizontal movement and zooming
+        self.pg_user_plot.getViewBox().setMouseMode(pg.ViewBox.PanMode)
+        self.pg_user_plot.getViewBox().setAspectLocked(False)
+        self.pg_user_plot.getViewBox().setMouseEnabled(x=True, y=False)
         waveform_layout.addWidget(self.pg_user_plot)
         self.pg_curve = None
         # Create region with proper configuration for edge dragging
@@ -1673,9 +1687,6 @@ class PitchAccentApp(QMainWindow):
             view_pos = view.mapSceneToView(adjusted_pos)
             x = view_pos.x()
             
-            # Debug print
-            print(f"Mouse scene pos: {scene_pos}, Adjusted pos: {adjusted_pos}, View pos: {view_pos}, X: {x}")
-            
             # Clamp to valid range
             max_end = self.native_times[-1] - (self._default_selection_margin + 0.05) if hasattr(self, 'native_times') and len(self.native_times) > 0 else 0
             x = max(0.0, min(x, max_end))
@@ -1696,6 +1707,12 @@ class PitchAccentApp(QMainWindow):
                     self.pg_plot.removeItem(self._temp_line)
                     del self._temp_line
                 del self._selection_start
+        elif event.button() == Qt.MouseButton.RightButton and hasattr(self, '_selection_start'):
+            # Abort selection in progress
+            if hasattr(self, '_temp_line'):
+                self.pg_plot.removeItem(self._temp_line)
+                del self._temp_line
+            del self._selection_start
 
     def _on_pg_region_changed(self):
         """Handle region changes"""
