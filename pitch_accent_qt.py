@@ -176,6 +176,11 @@ class PitchAccentApp(QMainWindow):
         self.input_selector.currentIndexChanged.connect(self.on_input_device_changed)
         # self.output_selector.currentIndexChanged.connect(self.on_output_device_changed)
 
+        self.setup_shortcuts()
+
+        # Make window non-resizable
+        self.setFixedSize(self.size())
+
     def setup_ui(self):
         """Initialize the main UI components"""
         self.setWindowTitle("Pitch Accent Trainer")
