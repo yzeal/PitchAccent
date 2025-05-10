@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
     QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider, QDialog, QFormLayout, QDialogButtonBox, QKeySequenceEdit
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl
-from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut, QIntValidator
+from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut, QIntValidator, QPen
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -73,6 +73,31 @@ class VideoWidget(QLabel):
             painter = QPainter(self)
             painter.drawImage(x, y, image)
             painter.end()
+
+class PlaybackLineOverlay(QWidget):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setGeometry(parent.geometry())
+        self.raise_()
+        self._x_pos = 0
+
+    def set_x_position(self, x):
+        self._x_pos = int(x)  # Ensure x is an integer
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(Qt.GlobalColor.red, 2, Qt.PenStyle.DashLine))
+        painter.drawLine(self._x_pos, 0, self._x_pos, self.height())
+        painter.end()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.setGeometry(self.parent().geometry())
 
 class PitchAccentApp(QMainWindow):
     def __init__(self):
@@ -283,10 +308,16 @@ class PitchAccentApp(QMainWindow):
         waveform_section = QWidget()
         waveform_layout = QVBoxLayout(waveform_section)
         
-        # Create matplotlib figure
-        self.figure = Figure(figsize=(8, 4), dpi=100)
+        # Create matplotlib figure and canvas
+        self.figure = Figure(figsize=(8, 6))
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        
+        # Create playback line overlays for both plots
+        self.native_playback_overlay = PlaybackLineOverlay(self.canvas)
+        self.native_playback_overlay.show()
+        self.user_playback_overlay = PlaybackLineOverlay(self.canvas)
+        self.user_playback_overlay.show()
         
         # Create subplots
         self.ax_native = self.figure.add_subplot(211)  # Native pitch
@@ -494,7 +525,7 @@ class PitchAccentApp(QMainWindow):
                 pass
             # Clamp to axis range
             playback_time = max(0.0, min(playback_time, max_end))
-            self.native_playback_line = self.ax_native.axvline(playback_time, color='red', linestyle='--', linewidth=2)
+            self.native_playback_overlay.set_x_position(playback_time)
         
         # User pitch
         self.ax_user.clear()
@@ -577,8 +608,8 @@ class PitchAccentApp(QMainWindow):
                 self.vlc_player.set_hwnd(int(self.video_widget.winId()))
                 
                 # Set audio output device and volume
-                device_id = self.output_devices[self.output_selector.currentIndex()]['index']
-                device_name = self.output_devices[self.output_selector.currentIndex()]['name']
+                device_id = self.output_devices[0]['index']
+                device_name = self.output_devices[0]['name']
                 print(f"[DEBUG] Setting VLC audio output device to: {device_name} (ID: {device_id})")
                 
                 # Set audio device using platform-specific method
@@ -787,18 +818,32 @@ class PitchAccentApp(QMainWindow):
         elif state == vlc.State.Paused:
             self.play_pause_btn.setText("Play")
             self.stop_btn.setEnabled(False)
-        # Update overlay
+            
+        # Update native playback line position
         ms = self.vlc_player.get_time()
         max_end = self._clip_duration - self._default_selection_margin - 0.05
         t = 0.0
         if ms is not None and ms >= 0:
             t = ms / 1000.0
         t = max(0.0, min(t, max_end))
-        if not hasattr(self, 'native_playback_line') or self.native_playback_line is None:
-            self.native_playback_line = self.ax_native.axvline(t, color='red', linestyle='--', linewidth=2)
+        
+        # Convert time to x-pixel position for native plot
+        ax = self.ax_native
+        x_min, x_max = ax.get_xlim()
+        bbox = self.canvas.geometry()
+        ax_bbox = ax.get_position()
+        left = int(ax_bbox.x0 * bbox.width())
+        right = int(ax_bbox.x1 * bbox.width())
+        width = right - left
+        
+        if x_max > x_min:
+            frac = (t - x_min) / (x_max - x_min)
+            frac = min(1.0, max(0.0, frac))
         else:
-            self.native_playback_line.set_xdata([t, t])
-        self.canvas.draw_idle()
+            frac = 0.0
+        x = int(left + frac * width)
+        
+        self.native_playback_overlay.set_x_position(x)
 
     def stop_native(self):
         """Reset to start (or loop start) and pause"""
@@ -874,22 +919,32 @@ class PitchAccentApp(QMainWindow):
 
     def update_native_playback_overlay(self, reset=False):
         if reset:
-            if hasattr(self, 'native_playback_line') and self.native_playback_line:
-                try:
-                    self.native_playback_line.remove()
-                except Exception:
-                    pass
-                self.native_playback_line = None
-                self.canvas.draw_idle()
+            if hasattr(self, 'native_playback_overlay'):
+                self.native_playback_overlay.set_x_position(0)
             return
         ms = self.vlc_player.get_time()
         if ms is not None and ms >= 0:
             t = ms / 1000.0
-            if not hasattr(self, 'native_playback_line') or self.native_playback_line is None:
-                self.native_playback_line = self.ax_native.axvline(t, color='red', linestyle='--', linewidth=2)
+            max_end = self._clip_duration - self._default_selection_margin - 0.05
+            t = max(0.0, min(t, max_end))
+            
+            # Convert time to x-pixel position for native plot
+            ax = self.ax_native
+            x_min, x_max = ax.get_xlim()
+            bbox = self.canvas.geometry()
+            ax_bbox = ax.get_position()
+            left = int(ax_bbox.x0 * bbox.width())
+            right = int(ax_bbox.x1 * bbox.width())
+            width = right - left
+            
+            if x_max > x_min:
+                frac = (t - x_min) / (x_max - x_min)
+                frac = min(1.0, max(0.0, frac))
             else:
-                self.native_playback_line.set_xdata([t, t])
-            self.canvas.draw_idle()
+                frac = 0.0
+            x = int(left + frac * width)
+            
+            self.native_playback_overlay.set_x_position(x)
 
     def toggle_recording(self):
         """Toggle recording state"""
@@ -1001,10 +1056,7 @@ class PitchAccentApp(QMainWindow):
         from PyQt6.QtCore import QTimer
         # Prevent overlapping playbacks/timers
         self._cleanup_playback_lines()
-        if hasattr(self, 'user_playback_line') and self.user_playback_line:
-            self.user_playback_line.remove()
-        self.user_playback_line = self.ax_user.axvline(0, color='red', linestyle='--', linewidth=2)
-        self.canvas.draw_idle()
+        
         self.user_playback_start_time = time.time()
         try:
             import numpy as np
@@ -1018,27 +1070,31 @@ class PitchAccentApp(QMainWindow):
         def update_playback_line():
             elapsed = time.time() - self.user_playback_start_time
             pos = elapsed
-            try:
-                if self.user_playback_line and self.user_playback_line in self.ax_user.lines:
-                    self.user_playback_line.set_xdata([pos, pos])
-                    self.canvas.draw_idle()
-            except Exception:
-                pass
+            
+            # Convert time to x-pixel position for user plot
+            ax = self.ax_user
+            x_min, x_max = ax.get_xlim()
+            bbox = self.canvas.geometry()
+            ax_bbox = ax.get_position()
+            left = int(ax_bbox.x0 * bbox.width())
+            right = int(ax_bbox.x1 * bbox.width())
+            width = right - left
+            
+            if x_max > x_min:
+                frac = (pos - x_min) / (x_max - x_min)
+                frac = min(1.0, max(0.0, frac))
+            else:
+                frac = 0.0
+            x = int(left + frac * width)
+            
+            self.user_playback_overlay.set_x_position(x)
+            
             if elapsed >= duration or not self.user_playing:
                 try:
                     self.user_playback_timer.stop()
                 except Exception:
                     pass
-                try:
-                    if self.user_playback_line and self.user_playback_line in self.ax_user.lines:
-                        self.user_playback_line.remove()
-                except Exception:
-                    pass
-                self.user_playback_line = None
-                try:
-                    self.canvas.draw_idle()
-                except Exception:
-                    pass
+                self.user_playback_overlay.set_x_position(0)
         self.user_playback_timer.timeout.connect(update_playback_line)
         self.user_playback_timer.start()
         # Start playback in a background thread
@@ -1055,7 +1111,7 @@ class PitchAccentApp(QMainWindow):
                 last = nonzero[-1] + 1
                 audio_data = audio_data[:last]
             # Get selected output device
-            device_id = self.output_devices[self.output_selector.currentIndex()]['index']
+            device_id = self.output_devices[0]['index']  # Use first output device for now
             sd.play(audio_data, sample_rate, device=device_id)
             sd.wait()
             self.user_playing = False
@@ -1082,9 +1138,9 @@ class PitchAccentApp(QMainWindow):
         import time
         from PyQt6.QtCore import QTimer
         self._cleanup_playback_lines()
-        if hasattr(self, 'user_playback_line') and self.user_playback_line:
-            self.user_playback_line.remove()
-        self.user_playback_line = self.ax_user.axvline(0, color='red', linestyle='--', linewidth=2)
+        if hasattr(self, 'user_playback_overlay') and self.user_playback_overlay:
+            self.user_playback_overlay.remove()
+        self.user_playback_overlay = self.ax_user.axvline(0, color='red', linestyle='--', linewidth=2)
         self.canvas.draw_idle()
         self.user_playback_start_time = time.time()
         try:
@@ -1105,8 +1161,8 @@ class PitchAccentApp(QMainWindow):
             elapsed = (time.time() - self.user_playback_start_time) % duration if duration > 0 else 0
             pos = elapsed
             try:
-                if self.user_playback_line and self.user_playback_line in self.ax_user.lines:
-                    self.user_playback_line.set_xdata([pos, pos])
+                if self.user_playback_overlay and self.user_playback_overlay in self.ax_user.lines:
+                    self.user_playback_overlay.set_xdata([pos, pos])
                     self.canvas.draw_idle()
             except Exception:
                 pass
@@ -1116,11 +1172,11 @@ class PitchAccentApp(QMainWindow):
                 except Exception:
                     pass
                 try:
-                    if self.user_playback_line and self.user_playback_line in self.ax_user.lines:
-                        self.user_playback_line.remove()
+                    if self.user_playback_overlay and self.user_playback_overlay in self.ax_user.lines:
+                        self.user_playback_overlay.remove()
                 except Exception:
                     pass
-                self.user_playback_line = None
+                self.user_playback_overlay = None
                 try:
                     self.canvas.draw_idle()
                 except Exception:
@@ -1141,7 +1197,7 @@ class PitchAccentApp(QMainWindow):
                 last = nonzero[-1] + 1
                 audio_data = audio_data[:last]
             # Get selected output device
-            device_id = self.output_devices[self.output_selector.currentIndex()]['index']
+            device_id = self.output_devices[0]['index']  # Use first output device for now
             while self.user_playing:
                 sd.play(audio_data, sample_rate, device=device_id)
                 sd.wait()
@@ -1229,13 +1285,11 @@ class PitchAccentApp(QMainWindow):
                 self.user_playback_timer = None
         except Exception:
             pass
-        try:
-            if hasattr(self, 'user_playback_line') and self.user_playback_line is not None:
-                if self.user_playback_line in self.ax_user.lines:
-                    self.user_playback_line.remove()
-                self.user_playback_line = None
-        except Exception:
-            pass
+        # Reset playback line overlay positions
+        if hasattr(self, 'native_playback_overlay'):
+            self.native_playback_overlay.set_x_position(0)
+        if hasattr(self, 'user_playback_overlay'):
+            self.user_playback_overlay.set_x_position(0)
 
     def rotate_video(self, angle):
         """Rotate video display"""
