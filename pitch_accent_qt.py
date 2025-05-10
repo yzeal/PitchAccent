@@ -597,14 +597,14 @@ class PitchAccentApp(QMainWindow):
             self.user_playback_overlay.update_geometry()
 
     def select_file(self):
-        print("[DEBUG] select_file: called")
+        # print("[DEBUG] select_file: called")
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Video File",
             "",
             "Video Files (*.mp4 *.avi *.mov);;All Files (*.*)"
         )
-        print(f"[DEBUG] select_file: file_path={file_path}")
+        # print(f"[DEBUG] select_file: file_path={file_path}")
         if file_path:
             try:
                 self.load_file(file_path)
@@ -613,9 +613,9 @@ class PitchAccentApp(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
 
     def load_file(self, file_path):
-        print(f"[DEBUG] load_file: called with {file_path}")
+        # print(f"[DEBUG] load_file: called with {file_path}")
         def after_vlc_stopped():
-            print("[DEBUG] load_file: destroying and recreating VLC player and video widget instance")
+            # print("[DEBUG] load_file: destroying and recreating VLC player and video widget instance")
             try:
                 # Remove old player and video widget and create new ones
                 self.vlc_player.set_media(None)
@@ -639,7 +639,7 @@ class PitchAccentApp(QMainWindow):
                 # Set audio output device and volume
                 device_id = self.output_devices[0]['index']
                 device_name = self.output_devices[0]['name']
-                print(f"[DEBUG] Setting VLC audio output device to: {device_name} (ID: {device_id})")
+                # print(f"[DEBUG] Setting VLC audio output device to: {device_name} (ID: {device_id})")
                 
                 # Set audio device using platform-specific method
                 if sys.platform == 'win32':
@@ -676,7 +676,7 @@ class PitchAccentApp(QMainWindow):
                 self.vlc_poll_timer.timeout.connect(self.poll_vlc_state_and_overlay)
                 self.vlc_events = self.vlc_player.event_manager()
                 self.vlc_events.event_attach(vlc.EventType.MediaPlayerEndReached, self.on_vlc_end_reached)
-                print("[DEBUG] load_file: VLC player and video widget instance recreated")
+                # print("[DEBUG] load_file: VLC player and video widget instance recreated")
             except Exception as e:
                 print(f"[DEBUG] load_file: Exception while recreating VLC player/video widget: {e}")
             # print("[DEBUG] load_file: stopping vlc_poll_timer")
@@ -691,53 +691,53 @@ class PitchAccentApp(QMainWindow):
             ext = os.path.splitext(file_path)[1].lower()
             audio_path = os.path.join(tempfile.gettempdir(), "temp_audio.wav")
             try:
-                print(f"[DEBUG] load_file: file extension is {ext}")
+                # print(f"[DEBUG] load_file: file extension is {ext}")
                 if ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-                    print("[DEBUG] load_file: creating VideoFileClip")
+                    # print("[DEBUG] load_file: creating VideoFileClip")
                     video = VideoFileClip(file_path)
-                    print("[DEBUG] load_file: extracting audio from video")
+                    # print("[DEBUG] load_file: extracting audio from video")
                     video.audio.write_audiofile(audio_path)
-                    print("[DEBUG] load_file: audio extracted")
-                    print("[DEBUG] load_file: setting media for VLC")
+                    # print("[DEBUG] load_file: audio extracted")
+                    # print("[DEBUG] load_file: setting media for VLC")
                     self.vlc_player.set_hwnd(int(self.video_widget.winId()))
                     media = self.vlc_instance.media_new(file_path)
                     self.vlc_player.set_media(media)
-                    print("[DEBUG] load_file: media set for VLC")
+                    # print("[DEBUG] load_file: media set for VLC")
                     self.video_widget.show()
                 elif ext in [".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"]:
-                    print("[DEBUG] load_file: creating AudioFileClip")
+                    # print("[DEBUG] load_file: creating AudioFileClip")
                     audio = AudioFileClip(file_path)
-                    print("[DEBUG] load_file: extracting audio from audio file")
+                    # print("[DEBUG] load_file: extracting audio from audio file")
                     audio.write_audiofile(audio_path)
-                    print("[DEBUG] load_file: audio extracted")
+                    # print("[DEBUG] load_file: audio extracted")
                     self.vlc_player.set_hwnd(int(self.video_widget.winId()))
                     media = self.vlc_instance.media_new(file_path)
                     self.vlc_player.set_media(media)
-                    print("[DEBUG] load_file: media set for VLC (audio file)")
+                    # print("[DEBUG] load_file: media set for VLC (audio file)")
                     self.video_widget.show()
                 else:
                     print("[DEBUG] load_file: unsupported file type")
                     raise ValueError("Unsupported file type.")
-                print("[DEBUG] load_file: storing paths and processing audio")
+                # print("[DEBUG] load_file: storing paths and processing audio")
                 self.native_audio_path = audio_path
                 self.video_path = file_path
                 self.process_audio()
-                print("[DEBUG] load_file: processed audio")
+                # print("[DEBUG] load_file: processed audio")
                 # Enable controls and show first frame
                 self.play_pause_btn.setEnabled(True)
                 self.loop_checkbox.setEnabled(True)
                 self.record_btn.setEnabled(True)
-                print("[DEBUG] load_file: showing first frame")
+                # print("[DEBUG] load_file: showing first frame")
                 self.show_first_frame()
-                print("[DEBUG] load_file: showed first frame")
+                # print("[DEBUG] load_file: showed first frame")
                 self.native_playback_overlay.show()
             except Exception as e:
                 print(f"[DEBUG] load_file: Exception in file processing: {e}")
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
         try:
             state = self.vlc_player.get_state()
-            print(f"[DEBUG] load_file: VLC player state before stop: {state}")
-            print("[DEBUG] load_file: destroying and recreating VLC player instance (pre-emptive)")
+            # print(f"[DEBUG] load_file: VLC player state before stop: {state}")
+            # print("[DEBUG] load_file: destroying and recreating VLC player instance (pre-emptive)")
             self.vlc_player.set_media(None)
             del self.vlc_player
             self.vlc_player = self.vlc_instance.media_player_new()
@@ -749,7 +749,7 @@ class PitchAccentApp(QMainWindow):
             self.vlc_poll_timer.timeout.connect(self.poll_vlc_state_and_overlay)
             self.vlc_events = self.vlc_player.event_manager()
             self.vlc_events.event_attach(vlc.EventType.MediaPlayerEndReached, self.on_vlc_end_reached)
-            print("[DEBUG] load_file: VLC player instance recreated (pre-emptive)")
+            # print("[DEBUG] load_file: VLC player instance recreated (pre-emptive)")
             after_vlc_stopped()
         except Exception as e:
             print(f"[DEBUG] load_file: Exception: {e}")
@@ -1067,19 +1067,19 @@ class PitchAccentApp(QMainWindow):
         self.recording_indicator.setText("● Recording...")
         self.recording_indicator.setVisible(True)
         try:
-            print("[DEBUG] Starting _record_thread...")
+            # print("[DEBUG] Starting _record_thread...")
             threading.Thread(target=self._record_thread, daemon=True).start()
         except Exception as e:
             print(f"[DEBUG] Failed to start _record_thread: {e}")
 
     def _record_thread(self):
         """Thread function for recording"""
-        print("[DEBUG] _record_thread started")
+        # print("[DEBUG] _record_thread started")
         try:
             try:
                 # Get selected input device
                 device_id = self.input_devices[self.input_selector.currentIndex()]['index']
-                print(f"[DEBUG] Using input device index: {device_id}")
+                # print(f"[DEBUG] Using input device index: {device_id}")
                 # Start recording
                 recording = sd.rec(
                     int(self.max_recording_time * 44100),
@@ -1087,19 +1087,19 @@ class PitchAccentApp(QMainWindow):
                     channels=1,
                     device=device_id
                 )
-                print("[DEBUG] sd.rec called, entering while loop...")
+                # print("[DEBUG] sd.rec called, entering while loop...")
                 # Wait for recording to complete or stop
                 while self.recording:
                     #print("[DEBUG] ...recording in progress...")
                     time.sleep(0.1)
-                print("[DEBUG] Exited while loop, calling sd.stop()")
+                # print("[DEBUG] Exited while loop, calling sd.stop()")
                 # Stop recording
                 sd.stop()
                 sd.wait()
-                print("[DEBUG] sd.stop() called, about to write file...")
+                # print("[DEBUG] sd.stop() called, about to write file...")
                 # Always process and save after recording stops
-                print(f"[DEBUG] recording.shape: {recording.shape}, dtype: {recording.dtype}")
-                print(f"[DEBUG] recording min: {np.min(recording)}, max: {np.max(recording)}")
+                # print(f"[DEBUG] recording.shape: {recording.shape}, dtype: {recording.dtype}")
+                # print(f"[DEBUG] recording min: {np.min(recording)}, max: {np.max(recording)}")
                 try:
                     # Trim trailing zeros (silence)
                     abs_rec = np.abs(recording.squeeze())
@@ -1111,7 +1111,7 @@ class PitchAccentApp(QMainWindow):
                         trimmed = recording
                     # Convert float32 [-1, 1] to int16 for wavfile.write
                     recording_int16 = np.int16(np.clip(trimmed, -1, 1) * 32767)
-                    print(f"[DEBUG] recording_int16.shape: {recording_int16.shape}, dtype: {recording_int16.dtype}")
+                    # print(f"[DEBUG] recording_int16.shape: {recording_int16.shape}, dtype: {recording_int16.dtype}")
                     wavfile.write(self.user_audio_path, 44100, recording_int16)
                     print(f"[DEBUG] Saved user recording to: {self.user_audio_path}")
                     if os.path.exists(self.user_audio_path):
@@ -1591,7 +1591,7 @@ class PitchAccentApp(QMainWindow):
                     self.vlc_player.audio_set_mute(False)
                     self.vlc_player.audio_set_volume(100)
                     
-                    print(f"[DEBUG] Set VLC audio output device to: {device_name} (ID: {device_id})")
+                    # print(f"[DEBUG] Set VLC audio output device to: {device_name} (ID: {device_id})")
                     
                     # Resume playback if it was playing
                     if was_playing:
