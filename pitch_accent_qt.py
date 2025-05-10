@@ -737,11 +737,16 @@ class PitchAccentApp(QMainWindow):
         self._play_pause_debounce = True
         state = self.vlc_player.get_state()
         if state in [vlc.State.Playing, vlc.State.Buffering]:
+            # Just pause at current position without seeking
             self.vlc_player.pause()
             self.play_pause_btn.setText("Play")
             self.vlc_poll_timer.stop()
+            self.stop_btn.setEnabled(True)  # Keep stop button enabled during pause
+            # Reset interpolation state to prevent jumping
+            self._last_playback_time = time.time()
+            self._last_playback_pos = self.vlc_player.get_time() / 1000.0
         else:
-            # Try to nudge the position slightly before playing
+            # When resuming playback, check if we need to seek to loop start
             current_time = self.vlc_player.get_time() / 1000.0
             if current_time < self._loop_start or current_time >= self._loop_end:
                 self._expecting_seek = True
@@ -804,7 +809,10 @@ class PitchAccentApp(QMainWindow):
                         self.vlc_poll_timer.stop()
         elif state == vlc.State.Paused:
             self.play_pause_btn.setText("Play")
-            self.stop_btn.setEnabled(False)
+            # Keep stop button enabled during pause unless we just stopped
+            if not hasattr(self, '_just_stopped') or not self._just_stopped:
+                self.stop_btn.setEnabled(True)
+            self._just_stopped = False
         # --- Update indicator state for smooth animation ---
         now = time.time()
         ms = self.vlc_player.get_time()
@@ -850,19 +858,8 @@ class PitchAccentApp(QMainWindow):
             self._indicator_timer.start()
             self._indicator_timer_active = True
 
-        # Snap overlay to actual position on poll (for pause/stop)
-        if state not in [vlc.State.Playing, vlc.State.Buffering]:
-            ax = self.ax_native
-            x_min, x_max = ax.get_xlim()
-            bbox = self.native_playback_overlay.geometry()
-            width = bbox.width()
-            if x_max > x_min:
-                frac = (t - x_min) / (x_max - x_min)
-                frac = min(1.0, max(0.0, frac))
-            else:
-                frac = 0.0
-            x = int(frac * width)
-            self.native_playback_overlay.set_x_position(x)
+        # Update playback indicator
+        self.pg_playback_line.setValue(self._last_playback_pos)
 
     def _update_native_playback_indicator(self):
         import time
@@ -887,19 +884,25 @@ class PitchAccentApp(QMainWindow):
             self._loop_delay_timer.stop()
             self._loop_delay_timer = None
         start_time = self._loop_start if self._loop_end is not None else 0
-        # Robust stop: pause first, then seek, then pause again
+        
+        # First pause the player
         self.vlc_player.pause()
-        def seek_and_pause():
-            self._expecting_seek = True
-            self._seek_grace_start = time.time()
-            self.vlc_player.set_time(int(start_time * 1000))
-            QTimer.singleShot(100, self.vlc_player.pause)
-        QTimer.singleShot(100, seek_and_pause)
+        
+        # Then seek to start position
+        self._expecting_seek = True
+        self._seek_grace_start = time.time()
+        self.vlc_player.set_time(int(start_time * 1000))
+        
+        # Update UI state
         self.play_pause_btn.setText("Play")
         self.stop_btn.setEnabled(False)
         self.vlc_poll_timer.stop()
         self._indicator_timer.stop()
         self._indicator_timer_active = False
+        
+        # Set flag to indicate we just stopped
+        self._just_stopped = True
+        
         # Reset indicator visually
         self.pg_playback_line.setValue(start_time)
         self._last_playback_time = time.time()
@@ -1054,21 +1057,21 @@ class PitchAccentApp(QMainWindow):
             self.user_playback_pos = time.time() - self.user_playback_start_time
             self.user_playing = False
             self.play_user_btn.setText('Play User')
-            self.stop_user_btn.setEnabled(True)
+            self.stop_user_btn.setEnabled(True)  # Keep stop button enabled during pause
             return
         # If resuming from pause
         if self.user_playback_paused:
             self.user_playback_paused = False
             self.user_playing = True
             self.play_user_btn.setText('Pause User')
-            self.stop_user_btn.setEnabled(True)
+            self.stop_user_btn.setEnabled(True)  # Ensure stop button is enabled when resuming
             QTimer.singleShot(0, lambda: self.start_user_playback_with_timer(resume=True))
             return
         # Start playback from beginning
         self.user_playing = True
         self.play_user_btn.setText('Pause User')
         self.loop_user_btn.setEnabled(False)
-        self.stop_user_btn.setEnabled(True)
+        self.stop_user_btn.setEnabled(True)  # Ensure stop button is enabled when starting playback
         self.user_playback_pos = 0.0
         QTimer.singleShot(0, lambda: self.start_user_playback_with_timer(resume=False))
 
@@ -1133,7 +1136,9 @@ class PitchAccentApp(QMainWindow):
             self.user_playing = False
             self.play_user_btn.setEnabled(True)
             self.loop_user_btn.setEnabled(True)
-            self.stop_user_btn.setEnabled(False)
+            # Only disable stop button when playback finishes
+            if not self.user_playback_paused:
+                self.stop_user_btn.setEnabled(False)
             self.play_user_btn.setText('Play User')
 
     def loop_user(self):
