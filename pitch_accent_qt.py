@@ -1683,6 +1683,20 @@ class PitchAccentApp(QMainWindow):
                 self.setWindowTitle("Select Practice Portion")
                 self.setMinimumWidth(600)
                 
+                # Get file duration for start time limit
+                try:
+                    if file_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
+                        video = VideoFileClip(file_path)
+                        self.file_duration = video.duration
+                        video.close()
+                    else:
+                        audio = AudioFileClip(file_path)
+                        self.file_duration = audio.duration
+                        audio.close()
+                except Exception as e:
+                    print(f"Error getting file duration: {e}")
+                    self.file_duration = 0
+                
                 layout = QVBoxLayout(self)
                 
                 # Add VLC player
@@ -1701,14 +1715,15 @@ class PitchAccentApp(QMainWindow):
                 start_label = QLabel("Start Time (seconds):")
                 self.start_time = DraggableLineEdit()
                 self.start_time.setText("0")
-                self.start_time.setValidator(QIntValidator(0, 999999, self))
+                self.start_time.setValidator(QIntValidator(0, int(self.file_duration), self))
                 controls.addWidget(start_label)
                 controls.addWidget(self.start_time)
                 
                 # Duration input
                 duration_label = QLabel("Duration (seconds):")
                 self.duration = DraggableLineEdit()
-                self.duration.setText("180")  # Default 3 minutes
+                self.duration.setText("60")  # Default 1 minute
+                # Initial duration validator will be updated in update_duration_limit
                 self.duration.setValidator(QIntValidator(1, 180, self))
                 controls.addWidget(duration_label)
                 controls.addWidget(self.duration)
@@ -1742,8 +1757,24 @@ class PitchAccentApp(QMainWindow):
                 self.video_widget.show()
                 
                 # Connect signals
+                self.start_time.textChanged.connect(self.update_duration_limit)
                 self.start_time.textChanged.connect(self.update_selection)
                 self.duration.textChanged.connect(self.update_selection)
+            
+            def update_duration_limit(self):
+                """Update the maximum allowed duration based on start time"""
+                try:
+                    start_time = int(self.start_time.text())
+                    max_duration = min(180, int(self.file_duration - start_time))
+                    if max_duration < 1:
+                        max_duration = 1
+                    self.duration.setValidator(QIntValidator(1, max_duration, self))
+                    # If current duration exceeds new limit, adjust it
+                    current_duration = int(self.duration.text())
+                    if current_duration > max_duration:
+                        self.duration.setText(str(max_duration))
+                except ValueError:
+                    pass
             
             def toggle_play(self):
                 if self.vlc_player.is_playing():
@@ -1775,6 +1806,16 @@ class PitchAccentApp(QMainWindow):
                 try:
                     start_time = int(self.start_time.text())
                     duration = int(self.duration.text())
+                    
+                    # Validate selection doesn't exceed file duration
+                    if start_time + duration > self.file_duration:
+                        QMessageBox.warning(
+                            self,
+                            "Invalid Selection",
+                            f"Selection would exceed file duration of {self.file_duration:.1f} seconds.\n"
+                            f"Please adjust start time or duration."
+                        )
+                        return
                     
                     # Create output filename
                     base_name = os.path.splitext(os.path.basename(self.file_path))[0]
