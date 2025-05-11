@@ -1708,6 +1708,23 @@ class PitchAccentApp(QMainWindow):
                 self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
                 layout.addWidget(self.video_widget)
                 
+                # Add timeline slider
+                timeline_layout = QHBoxLayout()
+                self.time_label = QLabel("00:00")
+                self.timeline_slider = QSlider(Qt.Orientation.Horizontal)
+                self.timeline_slider.setMinimum(0)
+                self.timeline_slider.setMaximum(int(self.file_duration * 1000))  # Convert to milliseconds
+                self.timeline_slider.setValue(0)
+                self.timeline_slider.sliderPressed.connect(self.on_slider_pressed)
+                self.timeline_slider.sliderMoved.connect(self.on_slider_moved)
+                self.timeline_slider.sliderReleased.connect(self.on_slider_released)
+                duration_label = QLabel(f"{int(self.file_duration // 60):02d}:{int(self.file_duration % 60):02d}")
+                
+                timeline_layout.addWidget(self.time_label)
+                timeline_layout.addWidget(self.timeline_slider)
+                timeline_layout.addWidget(duration_label)
+                layout.addLayout(timeline_layout)
+                
                 # Add controls
                 controls = QHBoxLayout()
                 
@@ -1734,7 +1751,7 @@ class PitchAccentApp(QMainWindow):
                 controls.addWidget(self.play_btn)
                 
                 # Seek button
-                self.seek_btn = QPushButton("Seek to Start")
+                self.seek_btn = QPushButton("Go to Start")
                 self.seek_btn.clicked.connect(self.seek_to_start)
                 controls.addWidget(self.seek_btn)
                 
@@ -1756,10 +1773,57 @@ class PitchAccentApp(QMainWindow):
                 self.vlc_player.set_media(media)
                 self.video_widget.show()
                 
+                # Set up timer for updating timeline
+                self.timer = QTimer()
+                self.timer.setInterval(100)  # Update every 100ms
+                self.timer.timeout.connect(self.update_timeline)
+                self.timer.start()
+                
+                # Track if we're currently dragging
+                self._was_playing = False
+                self._is_dragging = False
+                
                 # Connect signals
                 self.start_time.textChanged.connect(self.update_duration_limit)
                 self.start_time.textChanged.connect(self.update_selection)
                 self.duration.textChanged.connect(self.update_selection)
+            
+            def update_timeline(self):
+                """Update timeline slider and time label"""
+                if self.vlc_player.is_playing() and not self._is_dragging:
+                    time = self.vlc_player.get_time()
+                    if time >= 0:
+                        self.timeline_slider.setValue(time)
+                        minutes = int(time // 60000)
+                        seconds = int((time % 60000) // 1000)
+                        self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
+            
+            def on_slider_pressed(self):
+                """Handle slider press - pause video if playing"""
+                self._is_dragging = True
+                self._was_playing = self.vlc_player.is_playing()
+                if self._was_playing:
+                    self.vlc_player.pause()
+                    self.play_btn.setText("Play")
+            
+            def on_slider_moved(self, value):
+                """Update time label while dragging slider"""
+                minutes = int(value // 60000)
+                seconds = int((value % 60000) // 1000)
+                self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
+            
+            def on_slider_released(self):
+                """Seek to position when slider is released"""
+                value = self.timeline_slider.value()
+                self.vlc_player.set_time(value)
+                # Update start time input if we're not playing
+                if not self._was_playing:
+                    self.start_time.setText(str(value // 1000))
+                else:
+                    # Resume playback if it was playing before
+                    self.vlc_player.play()
+                    self.play_btn.setText("Pause")
+                self._is_dragging = False
             
             def update_duration_limit(self):
                 """Update the maximum allowed duration based on start time"""
@@ -1788,6 +1852,7 @@ class PitchAccentApp(QMainWindow):
                 try:
                     start_time = int(self.start_time.text())
                     self.vlc_player.set_time(start_time * 1000)  # Convert to milliseconds
+                    self.timeline_slider.setValue(start_time * 1000)
                 except ValueError:
                     pass
             
@@ -1799,6 +1864,7 @@ class PitchAccentApp(QMainWindow):
                     current_time = self.vlc_player.get_time() / 1000.0
                     if current_time < start_time or current_time > start_time + duration:
                         self.vlc_player.set_time(start_time * 1000)
+                        self.timeline_slider.setValue(start_time * 1000)
                 except ValueError:
                     pass
             
@@ -1838,6 +1904,11 @@ class PitchAccentApp(QMainWindow):
                     self.accept()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to save selection: {str(e)}")
+            
+            def closeEvent(self, event):
+                """Clean up when window is closed"""
+                self.timer.stop()
+                event.accept()
         
         dialog = SelectionWindow(self, file_path)
         dialog.exec()
