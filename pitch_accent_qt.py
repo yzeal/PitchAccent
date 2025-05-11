@@ -15,7 +15,7 @@ from scipy.signal import medfilt, savgol_filter
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QCheckBox, QLineEdit,
-    QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider, QDialog, QFormLayout, QDialogButtonBox, QKeySequenceEdit
+    QFrame, QSizePolicy, QFileDialog, QMessageBox, QSlider, QDialog, QFormLayout, QDialogButtonBox, QKeySequenceEdit, QSpinBox
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QUrl, QRect, QPoint
 from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QPainter, QKeySequence, QShortcut, QIntValidator, QPen
@@ -111,6 +111,43 @@ class PlaybackLineOverlay(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_geometry()
+
+class DraggableLineEdit(QLineEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self._dragging = False
+        self._last_x = None
+        self._sensitivity = 0.5  # Adjust this value to change drag sensitivity
+        self.setValidator(QIntValidator(1, 1000, self))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._last_x = event.position().x()
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self._last_x = None
+            self.setCursor(Qt.CursorShape.IBeamCursor)
+        super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging and self._last_x is not None:
+            dx = event.position().x() - self._last_x
+            if abs(dx) >= 1:  # Only change value if moved at least 1 pixel
+                try:
+                    current_value = int(self.text())
+                    change = int(dx * self._sensitivity)
+                    new_value = max(1, min(1000, current_value + change))
+                    self.setText(str(new_value))
+                    self._last_x = event.position().x()
+                except ValueError:
+                    pass
+        super().mouseMoveEvent(event)
 
 class PitchAccentApp(QMainWindow):
     def __init__(self):
@@ -298,9 +335,9 @@ class PitchAccentApp(QMainWindow):
         y_axis_layout.setContentsMargins(0, 0, 0, 0)
         
         y_axis_label = QLabel("y axis:")
-        self.y_axis_input = QLineEdit("500")
+        self.y_axis_input = DraggableLineEdit()
+        self.y_axis_input.setText("500")
         self.y_axis_input.setFixedWidth(60)
-        self.y_axis_input.setValidator(QIntValidator(1, 1000, self))
         self.y_axis_input.textChanged.connect(self.on_y_axis_changed)
         hz_label = QLabel("Hz")
         
@@ -784,7 +821,6 @@ class PitchAccentApp(QMainWindow):
         else:
             y_max = 500  # Default value
         self.y_axis_input.setText(str(y_max))
-        self.pg_plot.setYRange(0, y_max, padding=0)
 
     def toggle_play_pause(self):
         """Handle play/pause button click"""
