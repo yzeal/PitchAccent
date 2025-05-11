@@ -1781,11 +1781,14 @@ class PitchAccentApp(QMainWindow):
                 
                 # Add buttons
                 buttons = QHBoxLayout()
-                self.save_btn = QPushButton("Save Selection")
-                self.save_btn.clicked.connect(self.save_selection)
+                self.use_btn = QPushButton("Use Selection")
+                self.use_btn.clicked.connect(self.save_selection)
+                self.save_and_use_btn = QPushButton("Save & Use")
+                self.save_and_use_btn.clicked.connect(self.save_and_use_selection)
                 self.cancel_btn = QPushButton("Cancel")
                 self.cancel_btn.clicked.connect(self.on_cancel)
-                buttons.addWidget(self.save_btn)
+                buttons.addWidget(self.use_btn)
+                buttons.addWidget(self.save_and_use_btn)
                 buttons.addWidget(self.cancel_btn)
                 layout.addLayout(buttons)
                 
@@ -1936,7 +1939,8 @@ class PitchAccentApp(QMainWindow):
 
                     # Show busy indicator and disable buttons
                     self.processing_label.setVisible(True)
-                    self.save_btn.setEnabled(False)
+                    self.use_btn.setEnabled(False)
+                    self.save_and_use_btn.setEnabled(False)
                     self.cancel_btn.setEnabled(False)
                     QApplication.processEvents()  # Ensure UI updates before blocking
 
@@ -1962,9 +1966,70 @@ class PitchAccentApp(QMainWindow):
                     QMessageBox.critical(self, "Error", f"Failed to save selection: {str(e)}")
                     # Hide busy indicator and re-enable buttons on error
                     self.processing_label.setVisible(False)
-                    self.save_btn.setEnabled(True)
+                    self.use_btn.setEnabled(True)
+                    self.save_and_use_btn.setEnabled(True)
                     self.cancel_btn.setEnabled(True)
-            
+
+            def save_and_use_selection(self):
+                try:
+                    start_time = int(self.start_time.text())
+                    duration = int(self.duration.text())
+
+                    # Validate selection doesn't exceed file duration
+                    if start_time + duration > self.file_duration:
+                        QMessageBox.warning(
+                            self,
+                            "Invalid Selection",
+                            f"Selection would exceed file duration of {self.file_duration:.1f} seconds.\n"
+                            f"Please adjust start time or duration."
+                        )
+                        return
+
+                    # Ask user for save location
+                    base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+                    default_name = f"{base_name}_selection.mp4"
+                    save_path, _ = QFileDialog.getSaveFileName(self, "Save Extracted Video", default_name, "Video Files (*.mp4)")
+                    if not save_path:
+                        return
+
+                    # Show busy indicator and disable buttons
+                    self.processing_label.setVisible(True)
+                    self.use_btn.setEnabled(False)
+                    self.save_and_use_btn.setEnabled(False)
+                    self.cancel_btn.setEnabled(False)
+                    QApplication.processEvents()
+
+                    # Always extract to a temp file first, then copy to save_path
+                    temp_path = os.path.join(tempfile.gettempdir(), default_name)
+                    if self.file_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
+                        video = VideoFileClip(self.file_path)
+                        selection = video.subclip(start_time, start_time + duration)
+                        selection.write_videofile(temp_path)
+                        video.close()
+                    else:
+                        audio = AudioFileClip(self.file_path)
+                        selection = audio.subclip(start_time, start_time + duration)
+                        selection.write_audiofile(temp_path)
+                        audio.close()
+
+                    # Copy temp file to user location
+                    import shutil
+                    shutil.copyfile(temp_path, save_path)
+
+                    # Load the selection in the main app (from temp file)
+                    self.main_window.load_file(temp_path)
+
+                    # Clean up after loading the new file
+                    self.cleanup()
+                    self.accept()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to save selection: {str(e)}")
+                    # Hide busy indicator and re-enable buttons on error
+                    self.processing_label.setVisible(False)
+                    self.use_btn.setEnabled(True)
+                    self.save_and_use_btn.setEnabled(True)
+                    self.cancel_btn.setEnabled(True)
+
             def on_cancel(self):
                 """Handle cancel button click"""
                 self.cleanup()
