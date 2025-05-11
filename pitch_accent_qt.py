@@ -553,7 +553,7 @@ class PitchAccentApp(QMainWindow):
                 for seg in self.pg_native_segments:
                     self.pg_plot.removeItem(seg)
             self.pg_native_segments = []
-            pen = pg.mkPen('b', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
+            pen = pg.mkPen('b', width=9, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
             start = None
             for i in range(len(voiced)):
                 if voiced[i] and start is None:
@@ -583,7 +583,7 @@ class PitchAccentApp(QMainWindow):
                 for seg in self.pg_user_segments:
                     self.pg_user_plot.removeItem(seg)
             self.pg_user_segments = []
-            pen = pg.mkPen('orange', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
+            pen = pg.mkPen('orange', width=9, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
             start = None
             for i in range(len(voiced)):
                 if voiced[i] and start is None:
@@ -804,7 +804,7 @@ class PitchAccentApp(QMainWindow):
         self.pg_plot.addItem(self.pg_playback_line)
         
         # Plot pitch curve more efficiently
-        pen = pg.mkPen('b', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
+        pen = pg.mkPen('b', width=9, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
         # Create a single plot item for all voiced segments
         voiced_indices = np.where(voiced)[0]
         if len(voiced_indices) > 0:
@@ -1381,7 +1381,7 @@ class PitchAccentApp(QMainWindow):
             self.pg_user_plot.addItem(self.pg_user_playback_line)
             
             # Plot pitch curve more efficiently
-            pen = pg.mkPen('orange', width=6, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
+            pen = pg.mkPen('orange', width=9, cap=pg.QtCore.Qt.PenCapStyle.RoundCap)
             # Create a single plot item for all voiced segments
             voiced_indices = np.where(voiced)[0]
             if len(voiced_indices) > 0:
@@ -1699,6 +1699,12 @@ class PitchAccentApp(QMainWindow):
                 
                 layout = QVBoxLayout(self)
                 
+                # Add instructional text
+                instruction_label = QLabel("Please choose a short portion of the video to practice with!")
+                instruction_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #333; margin: 10px;")
+                instruction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(instruction_label)
+                
                 # Add VLC player
                 self.vlc_instance = vlc.Instance()
                 self.vlc_player = self.vlc_instance.media_player_new()
@@ -1772,6 +1778,13 @@ class PitchAccentApp(QMainWindow):
                 media = self.vlc_instance.media_new(file_path)
                 self.vlc_player.set_media(media)
                 self.video_widget.show()
+                
+                # Show first frame
+                self.vlc_player.play()
+                QTimer.singleShot(50, lambda: (
+                    self.vlc_player.pause(),
+                    self.vlc_player.set_time(0)
+                ))
                 
                 # Set up timer for updating timeline
                 self.timer = QTimer()
@@ -1907,7 +1920,17 @@ class PitchAccentApp(QMainWindow):
             
             def closeEvent(self, event):
                 """Clean up when window is closed"""
+                # Stop the timer
                 self.timer.stop()
+                
+                # Stop and release VLC player
+                if self.vlc_player.is_playing():
+                    self.vlc_player.stop()
+                self.vlc_player.release()
+                
+                # Clean up VLC instance
+                self.vlc_instance.release()
+                
                 event.accept()
         
         dialog = SelectionWindow(self, file_path)
