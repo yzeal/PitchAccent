@@ -30,6 +30,18 @@ from PyQt6.QtMultimediaWidgets import QVideoWidget
 import vlc
 import pyqtgraph as pg
 import re
+import moviepy
+
+if getattr(sys, 'frozen', False):
+    ffmpeg_path = os.path.join(os.path.dirname(sys.executable), 'ffmpeg.exe')
+    os.environ['FFMPEG_BINARY'] = ffmpeg_path
+    # Force MoviePy to use this path
+    moviepy.config_defaults.FFMPEG_BINARY = ffmpeg_path
+else:
+    os.environ['FFMPEG_BINARY'] = 'ffmpeg'
+
+print("FFMPEG_BINARY (env):", os.environ.get('FFMPEG_BINARY'))
+print("MoviePy FFMPEG_BINARY:", moviepy.config_defaults.FFMPEG_BINARY)
 
 class VideoWidget(QLabel):
     def __init__(self, parent=None):

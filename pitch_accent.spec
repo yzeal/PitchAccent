@@ -3,32 +3,23 @@
 block_cipher = None
 
 a = Analysis(
-    ['pitch_accent_gui.py'],
+    ['pitch_accent_qt.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ('ffmpeg.exe', '.'),  # Bundle ffmpeg.exe in the root directory
+    ],
     datas=[],
     hiddenimports=[
-        'scipy.special.cython_special',
-        'scipy.io.matlab.streams',
-        'scipy.sparse.csgraph._validation',
-        'scipy.sparse._csparsetools',
-        'scipy.special._ufuncs_cxx',
-        'scipy.linalg.cython_blas',
-        'scipy.linalg.cython_lapack',
-        'scipy.integrate',
-        'scipy.integrate.quadrature',
-        'scipy.integrate.odepack',
-        'scipy.integrate._odepack',
-        'scipy.integrate.quadpack',
-        'scipy.integrate._quadpack',
-        'scipy.integrate._ode',
-        'scipy.integrate.vode',
-        'scipy.integrate._dop',
-        'scipy.integrate.lsoda',
+        'numpy',
+        'parselmouth',
+        'sounddevice',
+        'scipy',
+        'cv2',
         'moviepy',
-        'moviepy.audio.fx.all',
-        'moviepy.video.fx.all',
-        'tkinterdnd2'
+        'vlc',
+        'pyqtgraph',
+        'PIL',
+        'matplotlib',
     ],
     hookspath=[],
     hooksconfig={},
@@ -37,7 +28,7 @@ a = Analysis(
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
-    noarchive=False
+    noarchive=False,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
@@ -49,15 +40,16 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='PitchAccentTrainer',
+    name='pitch_accent_qt',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=False,  # Set to True if you want to see console output
     disable_windowed_traceback=False,
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
