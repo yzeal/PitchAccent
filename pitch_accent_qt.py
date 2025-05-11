@@ -1768,7 +1768,7 @@ class PitchAccentApp(QMainWindow):
                 self.save_btn = QPushButton("Save Selection")
                 self.save_btn.clicked.connect(self.save_selection)
                 self.cancel_btn = QPushButton("Cancel")
-                self.cancel_btn.clicked.connect(self.reject)
+                self.cancel_btn.clicked.connect(self.on_cancel)
                 buttons.addWidget(self.save_btn)
                 buttons.addWidget(self.cancel_btn)
                 layout.addLayout(buttons)
@@ -1881,6 +1881,24 @@ class PitchAccentApp(QMainWindow):
                 except ValueError:
                     pass
             
+            def cleanup(self):
+                """Clean up VLC resources"""
+                # Stop the timer
+                self.timer.stop()
+                
+                # Stop and release VLC player
+                if self.vlc_player.is_playing():
+                    self.vlc_player.stop()
+                self.vlc_player.release()
+                
+                # Clean up VLC instance
+                self.vlc_instance.release()
+            
+            def closeEvent(self, event):
+                """Clean up when window is closed"""
+                self.cleanup()
+                event.accept()
+            
             def save_selection(self):
                 try:
                     start_time = int(self.start_time.text())
@@ -1914,24 +1932,17 @@ class PitchAccentApp(QMainWindow):
                     
                     # Load the selection in the main app
                     self.parent().load_file(output_path)
+                    
+                    # Clean up after loading the new file
+                    self.cleanup()
                     self.accept()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to save selection: {str(e)}")
             
-            def closeEvent(self, event):
-                """Clean up when window is closed"""
-                # Stop the timer
-                self.timer.stop()
-                
-                # Stop and release VLC player
-                if self.vlc_player.is_playing():
-                    self.vlc_player.stop()
-                self.vlc_player.release()
-                
-                # Clean up VLC instance
-                self.vlc_instance.release()
-                
-                event.accept()
+            def on_cancel(self):
+                """Handle cancel button click"""
+                self.cleanup()
+                self.reject()
         
         dialog = SelectionWindow(self, file_path)
         dialog.exec()
