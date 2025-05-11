@@ -325,6 +325,12 @@ class PitchAccentApp(QMainWindow):
         self.select_file_btn.clicked.connect(self.select_file)
         controls_layout.addWidget(self.select_file_btn)
 
+        # Edit Native Recording button (initially disabled)
+        self.edit_native_btn = QPushButton("Edit Native Recording")
+        self.edit_native_btn.setEnabled(False)
+        self.edit_native_btn.clicked.connect(self.edit_native_recording)
+        controls_layout.addWidget(self.edit_native_btn)
+
         # Clear Loop Selection button
         self.clear_loop_btn = QPushButton("Clear Loop Selection")
         self.clear_loop_btn.clicked.connect(self.clear_selection)
@@ -766,6 +772,8 @@ class PitchAccentApp(QMainWindow):
             self.vlc_events = self.vlc_player.event_manager()
             self.vlc_events.event_attach(vlc.EventType.MediaPlayerEndReached, self.on_vlc_end_reached)
             after_vlc_stopped()
+            # Enable the edit button if a file is loaded
+            self.edit_native_btn.setEnabled(True)
         except Exception as e:
             print(f"[DEBUG] load_file: Exception: {e}")
             raise
@@ -1964,6 +1972,13 @@ class PitchAccentApp(QMainWindow):
         
         dialog = SelectionWindow(self, file_path)
         dialog.exec()
+
+    def edit_native_recording(self):
+        """Open the video editing window for the currently loaded native file"""
+        if hasattr(self, 'video_path') and self.video_path:
+            self.show_selection_window(self.video_path)
+        else:
+            QMessageBox.warning(self, "No File Loaded", "No native recording file is currently loaded.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
