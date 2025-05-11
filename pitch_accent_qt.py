@@ -29,6 +29,7 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 import vlc
 import pyqtgraph as pg
+import re
 
 class VideoWidget(QLabel):
     def __init__(self, parent=None):
@@ -1933,9 +1934,14 @@ class PitchAccentApp(QMainWindow):
                         )
                         return
 
-                    # Create output filename
+                    # Create output filename (safe ASCII)
                     base_name = os.path.splitext(os.path.basename(self.file_path))[0]
-                    output_path = os.path.join(tempfile.gettempdir(), f"{base_name}_selection.mp4")
+                    safe_base = safe_filename(base_name)
+                    is_audio = self.file_path.lower().endswith(('.mp3', '.wav', '.flac', '.ogg', '.aac', '.m4a'))
+                    if is_audio:
+                        output_path = os.path.join(tempfile.gettempdir(), f"{safe_base}_selection.mp3")
+                    else:
+                        output_path = os.path.join(tempfile.gettempdir(), f"{safe_base}_selection.mp4")
 
                     # Show busy indicator and disable buttons
                     self.processing_label.setVisible(True)
@@ -1945,16 +1951,16 @@ class PitchAccentApp(QMainWindow):
                     QApplication.processEvents()  # Ensure UI updates before blocking
 
                     # Extract portion using moviepy
-                    if self.file_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
-                        video = VideoFileClip(self.file_path)
-                        selection = video.subclip(start_time, start_time + duration)
-                        selection.write_videofile(output_path)
-                        video.close()
-                    else:
+                    if is_audio:
                         audio = AudioFileClip(self.file_path)
                         selection = audio.subclip(start_time, start_time + duration)
                         selection.write_audiofile(output_path)
                         audio.close()
+                    else:
+                        video = VideoFileClip(self.file_path)
+                        selection = video.subclip(start_time, start_time + duration)
+                        selection.write_videofile(output_path)
+                        video.close()
 
                     # Load the selection in the main app
                     self.main_window.load_file(output_path)
@@ -1987,8 +1993,15 @@ class PitchAccentApp(QMainWindow):
 
                     # Ask user for save location
                     base_name = os.path.splitext(os.path.basename(self.file_path))[0]
-                    default_name = f"{base_name}_selection.mp4"
-                    save_path, _ = QFileDialog.getSaveFileName(self, "Save Extracted Video", default_name, "Video Files (*.mp4)")
+                    safe_base = safe_filename(base_name)
+                    is_audio = self.file_path.lower().endswith(('.mp3', '.wav', '.flac', '.ogg', '.aac', '.m4a'))
+                    if is_audio:
+                        default_name = f"{safe_base}_selection.mp3"
+                        file_filter = "Audio Files (*.mp3)"
+                    else:
+                        default_name = f"{safe_base}_selection.mp4"
+                        file_filter = "Video Files (*.mp4)"
+                    save_path, _ = QFileDialog.getSaveFileName(self, "Save Extracted File", default_name, file_filter)
                     if not save_path:
                         return
 
@@ -2001,16 +2014,16 @@ class PitchAccentApp(QMainWindow):
 
                     # Always extract to a temp file first, then copy to save_path
                     temp_path = os.path.join(tempfile.gettempdir(), default_name)
-                    if self.file_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
-                        video = VideoFileClip(self.file_path)
-                        selection = video.subclip(start_time, start_time + duration)
-                        selection.write_videofile(temp_path)
-                        video.close()
-                    else:
+                    if is_audio:
                         audio = AudioFileClip(self.file_path)
                         selection = audio.subclip(start_time, start_time + duration)
                         selection.write_audiofile(temp_path)
                         audio.close()
+                    else:
+                        video = VideoFileClip(self.file_path)
+                        selection = video.subclip(start_time, start_time + duration)
+                        selection.write_videofile(temp_path)
+                        video.close()
 
                     # Copy temp file to user location
                     import shutil
@@ -2044,6 +2057,10 @@ class PitchAccentApp(QMainWindow):
             self.show_selection_window(self.video_path)
         else:
             QMessageBox.warning(self, "No File Loaded", "No native recording file is currently loaded.")
+
+def safe_filename(name):
+    # Replace non-ASCII characters with underscores
+    return re.sub(r'[^a-zA-Z0-9_.-]', '_', name)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
