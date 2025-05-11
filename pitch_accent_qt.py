@@ -292,6 +292,29 @@ class PitchAccentApp(QMainWindow):
         self.clear_loop_btn.clicked.connect(self.clear_selection)
         controls_layout.addWidget(self.clear_loop_btn)
 
+        # Y-axis control
+        y_axis_container = QWidget()
+        y_axis_layout = QHBoxLayout(y_axis_container)
+        y_axis_layout.setContentsMargins(0, 0, 0, 0)
+        
+        y_axis_label = QLabel("y axis:")
+        self.y_axis_input = QLineEdit("500")
+        self.y_axis_input.setFixedWidth(60)
+        self.y_axis_input.setValidator(QIntValidator(1, 1000, self))
+        self.y_axis_input.textChanged.connect(self.on_y_axis_changed)
+        hz_label = QLabel("Hz")
+        
+        self.reset_y_axis_btn = QPushButton("reset y axis")
+        self.reset_y_axis_btn.clicked.connect(self.reset_y_axis)
+        
+        y_axis_layout.addWidget(y_axis_label)
+        y_axis_layout.addWidget(self.y_axis_input)
+        y_axis_layout.addWidget(hz_label)
+        y_axis_layout.addWidget(self.reset_y_axis_btn)
+        y_axis_layout.addStretch()
+        
+        controls_layout.addWidget(y_axis_container)
+
         # Spacer
         controls_layout.addSpacing(20)
 
@@ -727,6 +750,41 @@ class PitchAccentApp(QMainWindow):
         self.pg_plot.setXRange(0, max_end, padding=0)
         self.pg_region.setRegion([0.0, max_end])
         self.pg_playback_line.setValue(0)
+        
+        # Reset y-axis to fit the data
+        self.reset_y_axis()
+
+    def update_y_axis_range(self, max_pitch):
+        """Update the y-axis range based on the current input value"""
+        try:
+            y_max = int(self.y_axis_input.text())
+            y_max = max(1, min(1000, y_max))  # Clamp to valid range
+            self.pg_plot.setYRange(0, y_max, padding=0)
+            return y_max
+        except ValueError:
+            return 500  # Default if input is invalid
+
+    def on_y_axis_changed(self, text):
+        """Handle y-axis input changes"""
+        try:
+            y_max = int(text)
+            y_max = max(1, min(1000, y_max))  # Clamp to valid range
+            if str(y_max) != text:  # If value was clamped, update the input
+                self.y_axis_input.setText(str(y_max))
+            self.pg_plot.setYRange(0, y_max, padding=0)
+        except ValueError:
+            pass  # Invalid input, ignore
+
+    def reset_y_axis(self):
+        """Reset y-axis to fit current data or default"""
+        if hasattr(self, 'native_pitch') and hasattr(self, 'native_voiced'):
+            max_pitch = np.max(self.native_pitch[self.native_voiced])
+            y_max = int(np.ceil(max_pitch / 50) * 50)  # Round up to nearest 50 Hz
+            y_max = max(1, min(1000, y_max))  # Clamp to valid range
+        else:
+            y_max = 500  # Default value
+        self.y_axis_input.setText(str(y_max))
+        self.pg_plot.setYRange(0, y_max, padding=0)
 
     def toggle_play_pause(self):
         """Handle play/pause button click"""
