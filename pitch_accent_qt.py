@@ -1679,6 +1679,7 @@ class PitchAccentApp(QMainWindow):
         class SelectionWindow(QDialog):
             def __init__(self, parent=None, file_path=None):
                 super().__init__(parent)
+                self.main_window = parent  # Store reference to main window
                 self.file_path = file_path
                 self.setWindowTitle("Select Practice Portion")
                 self.setMinimumWidth(600)
@@ -1760,6 +1761,13 @@ class PitchAccentApp(QMainWindow):
                 self.seek_btn = QPushButton("Go to Start")
                 self.seek_btn.clicked.connect(self.seek_to_start)
                 controls.addWidget(self.seek_btn)
+                
+                # Add busy indicator label (hidden by default)
+                self.processing_label = QLabel("Extracting, please wait...")
+                self.processing_label.setStyleSheet("font-size: 13px; color: #555; margin: 8px;")
+                self.processing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.processing_label.setVisible(False)
+                controls.addWidget(self.processing_label)
                 
                 layout.addLayout(controls)
                 
@@ -1903,7 +1911,7 @@ class PitchAccentApp(QMainWindow):
                 try:
                     start_time = int(self.start_time.text())
                     duration = int(self.duration.text())
-                    
+
                     # Validate selection doesn't exceed file duration
                     if start_time + duration > self.file_duration:
                         QMessageBox.warning(
@@ -1913,11 +1921,17 @@ class PitchAccentApp(QMainWindow):
                             f"Please adjust start time or duration."
                         )
                         return
-                    
+
                     # Create output filename
                     base_name = os.path.splitext(os.path.basename(self.file_path))[0]
                     output_path = os.path.join(tempfile.gettempdir(), f"{base_name}_selection.mp4")
-                    
+
+                    # Show busy indicator and disable buttons
+                    self.processing_label.setVisible(True)
+                    self.save_btn.setEnabled(False)
+                    self.cancel_btn.setEnabled(False)
+                    QApplication.processEvents()  # Ensure UI updates before blocking
+
                     # Extract portion using moviepy
                     if self.file_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
                         video = VideoFileClip(self.file_path)
@@ -1929,15 +1943,19 @@ class PitchAccentApp(QMainWindow):
                         selection = audio.subclip(start_time, start_time + duration)
                         selection.write_audiofile(output_path)
                         audio.close()
-                    
+
                     # Load the selection in the main app
-                    self.parent().load_file(output_path)
-                    
+                    self.main_window.load_file(output_path)
+
                     # Clean up after loading the new file
                     self.cleanup()
                     self.accept()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to save selection: {str(e)}")
+                    # Hide busy indicator and re-enable buttons on error
+                    self.processing_label.setVisible(False)
+                    self.save_btn.setEnabled(True)
+                    self.cancel_btn.setEnabled(True)
             
             def on_cancel(self):
                 """Handle cancel button click"""
