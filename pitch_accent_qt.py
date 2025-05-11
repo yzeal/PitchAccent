@@ -292,7 +292,8 @@ class PitchAccentApp(QMainWindow):
 
         # Loop delay input
         loop_delay_label = QLabel("Loop Delay:")
-        self.loop_delay_input = QLineEdit("0")
+        self.loop_delay_input = DraggableLineEdit()
+        self.loop_delay_input.setText("0")
         self.loop_delay_input.setFixedWidth(50)
         self.loop_delay_input.setValidator(QIntValidator(0, 800, self))
         self.loop_delay_input.setToolTip("Delay in milliseconds before repeating the loop (0-800 ms)")
