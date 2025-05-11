@@ -618,6 +618,22 @@ class PitchAccentApp(QMainWindow):
                 print(f"[DEBUG] select_file: Exception: {e}")
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
 
+    def check_file_duration(self, file_path):
+        """Check if file duration is within acceptable limits"""
+        try:
+            if file_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
+                video = VideoFileClip(file_path)
+                duration = video.duration
+                video.close()
+            else:
+                audio = AudioFileClip(file_path)
+                duration = audio.duration
+                audio.close()
+            return duration
+        except Exception as e:
+            print(f"Error checking file duration: {e}")
+            return None
+
     def load_file(self, file_path):
         def after_vlc_stopped():
             try:
@@ -718,6 +734,25 @@ class PitchAccentApp(QMainWindow):
                 print(f"[DEBUG] load_file: Exception in file processing: {e}")
                 QMessageBox.critical(self, "Error", f"Failed to load file: {str(e)}")
         try:
+            # Check file duration
+            duration = self.check_file_duration(file_path)
+            if duration is not None and duration > 300:  # 5 minutes
+                reply = QMessageBox.question(
+                    self,
+                    "Long File Detected",
+                    f"This file is {duration:.1f} seconds long. Would you like to select a portion to practice with?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.show_selection_window(file_path)
+                    return
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Warning",
+                        "Loading long files may cause performance issues. Consider selecting a shorter portion."
+                    )
+
             state = self.vlc_player.get_state()
             self.vlc_player.set_media(None)
             del self.vlc_player
@@ -1638,6 +1673,133 @@ class PitchAccentApp(QMainWindow):
         if index >= 0 and index < len(self.input_devices):
             device_id = self.input_devices[index]['index']
             print(f"Input device changed to: {self.input_devices[index]['name']} (ID: {device_id})")
+
+    def show_selection_window(self, file_path):
+        """Show window for selecting a portion of a long file"""
+        class SelectionWindow(QDialog):
+            def __init__(self, parent=None, file_path=None):
+                super().__init__(parent)
+                self.file_path = file_path
+                self.setWindowTitle("Select Practice Portion")
+                self.setMinimumWidth(600)
+                
+                layout = QVBoxLayout(self)
+                
+                # Add VLC player
+                self.vlc_instance = vlc.Instance()
+                self.vlc_player = self.vlc_instance.media_player_new()
+                self.video_widget = QWidget()
+                self.video_widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+                self.video_widget.setMinimumSize(400, 300)
+                self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                layout.addWidget(self.video_widget)
+                
+                # Add controls
+                controls = QHBoxLayout()
+                
+                # Start time input
+                start_label = QLabel("Start Time (seconds):")
+                self.start_time = DraggableLineEdit()
+                self.start_time.setText("0")
+                self.start_time.setValidator(QIntValidator(0, 999999, self))
+                controls.addWidget(start_label)
+                controls.addWidget(self.start_time)
+                
+                # Duration input
+                duration_label = QLabel("Duration (seconds):")
+                self.duration = DraggableLineEdit()
+                self.duration.setText("180")  # Default 3 minutes
+                self.duration.setValidator(QIntValidator(1, 180, self))
+                controls.addWidget(duration_label)
+                controls.addWidget(self.duration)
+                
+                # Play/Pause button
+                self.play_btn = QPushButton("Play")
+                self.play_btn.clicked.connect(self.toggle_play)
+                controls.addWidget(self.play_btn)
+                
+                # Seek button
+                self.seek_btn = QPushButton("Seek to Start")
+                self.seek_btn.clicked.connect(self.seek_to_start)
+                controls.addWidget(self.seek_btn)
+                
+                layout.addLayout(controls)
+                
+                # Add buttons
+                buttons = QHBoxLayout()
+                self.save_btn = QPushButton("Save Selection")
+                self.save_btn.clicked.connect(self.save_selection)
+                self.cancel_btn = QPushButton("Cancel")
+                self.cancel_btn.clicked.connect(self.reject)
+                buttons.addWidget(self.save_btn)
+                buttons.addWidget(self.cancel_btn)
+                layout.addLayout(buttons)
+                
+                # Set up VLC player
+                self.vlc_player.set_hwnd(int(self.video_widget.winId()))
+                media = self.vlc_instance.media_new(file_path)
+                self.vlc_player.set_media(media)
+                self.video_widget.show()
+                
+                # Connect signals
+                self.start_time.textChanged.connect(self.update_selection)
+                self.duration.textChanged.connect(self.update_selection)
+            
+            def toggle_play(self):
+                if self.vlc_player.is_playing():
+                    self.vlc_player.pause()
+                    self.play_btn.setText("Play")
+                else:
+                    self.vlc_player.play()
+                    self.play_btn.setText("Pause")
+            
+            def seek_to_start(self):
+                try:
+                    start_time = int(self.start_time.text())
+                    self.vlc_player.set_time(start_time * 1000)  # Convert to milliseconds
+                except ValueError:
+                    pass
+            
+            def update_selection(self):
+                try:
+                    start_time = int(self.start_time.text())
+                    duration = int(self.duration.text())
+                    # Update VLC player position if needed
+                    current_time = self.vlc_player.get_time() / 1000.0
+                    if current_time < start_time or current_time > start_time + duration:
+                        self.vlc_player.set_time(start_time * 1000)
+                except ValueError:
+                    pass
+            
+            def save_selection(self):
+                try:
+                    start_time = int(self.start_time.text())
+                    duration = int(self.duration.text())
+                    
+                    # Create output filename
+                    base_name = os.path.splitext(os.path.basename(self.file_path))[0]
+                    output_path = os.path.join(tempfile.gettempdir(), f"{base_name}_selection.mp4")
+                    
+                    # Extract portion using moviepy
+                    if self.file_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
+                        video = VideoFileClip(self.file_path)
+                        selection = video.subclip(start_time, start_time + duration)
+                        selection.write_videofile(output_path)
+                        video.close()
+                    else:
+                        audio = AudioFileClip(self.file_path)
+                        selection = audio.subclip(start_time, start_time + duration)
+                        selection.write_audiofile(output_path)
+                        audio.close()
+                    
+                    # Load the selection in the main app
+                    self.parent().load_file(output_path)
+                    self.accept()
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to save selection: {str(e)}")
+        
+        dialog = SelectionWindow(self, file_path)
+        dialog.exec()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
